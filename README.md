@@ -10,8 +10,14 @@
 ## 快速开始
 
 ```bash
-# 1. 安装依赖
+# 1. 安装运行依赖
 pip install -r requirements.txt
+
+# 开发/运行测试时，改用开发依赖
+pip install -r requirements-dev.txt
+
+# 也可以通过 pyproject.toml 以可编辑模式安装
+pip install -e ".[dev]"
 
 # 2. 配置 API Key
 cp .env.example .env
@@ -62,7 +68,7 @@ dataquery-copilot/
 │   └── cli.py             # 命令行（交互式 + 单次 + 批量）
 ├── scripts/
 │   └── generate_sample_data.py
-├── tests/                 # 单元测试（pytest，27 个用例）
+├── tests/                 # 单元测试（pytest，53 个用例）
 │   ├── conftest.py
 │   ├── test_data_loader.py
 │   ├── test_data_cleaner.py
@@ -73,7 +79,9 @@ dataquery-copilot/
 ├── docs/                  # 技术文档
 ├── questions.txt          # 批量查询示例
 ├── practice.py            # SQL 刷题练习
+├── pyproject.toml         # 项目元数据 + 标准依赖入口
 ├── requirements.txt
+├── requirements-dev.txt  # 开发/测试依赖
 ├── .env.example
 └── README.md
 ```
@@ -88,7 +96,7 @@ dataquery-copilot/
 - [x] 可视化输出
 - [x] SQL 安全校验增强（词边界匹配 + 字符串/注释过滤）
 - [x] 批量查询 CLI（从文件读取 + 汇总报告）
-- [x] 单元测试（pytest，27 个测试用例）
+- [x] 单元测试（pytest，53 个测试用例）
 - [x] 性能优化（查询缓存 + SQL 自动重试 + 查询日志）
 
 ## 高级功能
@@ -115,5 +123,5 @@ python -m src.cli batch questions.txt --output report.txt
 
 ### 单元测试
 ```bash
-python -m pytest tests/ -v   # 27 个测试用例
+python -m pytest tests/ -v   # 53 个测试用例
 ```
