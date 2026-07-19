@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: dataquery-copilot-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt && python scripts/generate_sample_data.py && python scripts/prepare_demo_db.py
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: MODEL_NAME
+        value: deepseek-chat
+      - key: DB_PATH
+        value: data/query.db
+      - key: DATA_FILE
+        value: data/sample_ecommerce.csv
+      - key: TABLE_NAME
+        value: orders
+      - key: CORS_ORIGINS
+        sync: false
+
+  - type: web
+    name: dataquery-copilot-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        sync: false

@@ -1,0 +1,13 @@
+.env
+.git
+.gitignore
+.idea
+.venv
+__pycache__
+.pytest_cache
+frontend/node_modules
+frontend/dist
+logs
+output
+*.db-wal
+*.db-shm

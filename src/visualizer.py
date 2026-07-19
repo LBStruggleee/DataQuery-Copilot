@@ -64,6 +64,11 @@ class Visualizer:
 
     def _detect_chart_type(self, df: pd.DataFrame) -> str:
         """根据列数和数据类型推断图表类型"""
+        return self.detect_chart_type(df)
+
+    @classmethod
+    def detect_chart_type(cls, df: pd.DataFrame) -> str:
+        """根据列数和数据类型推断图表类型，供非绘图调用方复用。"""
         num_cols = len(df.columns)
 
         if num_cols == 2:
@@ -71,30 +76,31 @@ class Visualizer:
             dtypes = df.dtypes
 
             # 日期 + 数值 -> 折线图
-            if pd.api.types.is_datetime64_any_dtype(df[col1]) and self._is_numeric(df[col2]):
+            if pd.api.types.is_datetime64_any_dtype(df[col1]) and cls._is_numeric(df[col2]):
                 return "line"
 
             # 分类 + 数值 -> 柱状图
-            if not self._is_numeric(df[col1]) and self._is_numeric(df[col2]):
+            if not cls._is_numeric(df[col1]) and cls._is_numeric(df[col2]):
                 if len(df) <= 30:  # 类别太多柱状图不好看
                     return "bar"
 
             # 数值 + 数值 -> 散点图
-            if self._is_numeric(df[col1]) and self._is_numeric(df[col2]):
+            if cls._is_numeric(df[col1]) and cls._is_numeric(df[col2]):
                 return "scatter"
 
         if num_cols == 1:
             col = df.columns[0]
-            if not self._is_numeric(df[col]) and len(df) <= 10:
+            if not cls._is_numeric(df[col]) and len(df) <= 10:
                 return "pie"
 
         # 多列数值，第一列是分类 -> 分组柱状图
-        if num_cols > 2 and not self._is_numeric(df.iloc[:, 0]):
+        if num_cols > 2 and not cls._is_numeric(df.iloc[:, 0]):
             return "bar"
 
         return "table"
 
-    def _is_numeric(self, series) -> bool:
+    @staticmethod
+    def _is_numeric(series) -> bool:
         """判断是否为数值类型"""
         return pd.api.types.is_numeric_dtype(series)
 

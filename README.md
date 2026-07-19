@@ -29,11 +29,34 @@ python scripts/generate_sample_data.py
 # 4. 启动交互式查询
 python -m src.cli interactive
 
+# 或启动前端使用的 HTTP API
+uvicorn api.main:app --reload
+# API 文档: http://127.0.0.1:8000/docs
+
+# 另开一个终端启动 React v0 页面
+cd frontend
+npm install
+npm run dev
+# 页面地址: http://127.0.0.1:5173
+
 # 示例查询：
 # > 上个月销售额最高的品类是什么？
 # > 各地区的订单数量分布
 # > 用户复购率排名前10的商品
 ```
+
+## 在线展示与部署
+
+当前仓库已提供前后端分离部署配置，但尚未绑定线上账号或发布虚构地址。部署步骤和环境变量说明见 [docs/deployment.md](docs/deployment.md)。
+
+部署完成后，作品集演示建议固定使用以下真实问题：
+
+- 各品类的销售总额
+- 销售额前 5 的商品
+- 各地区订单数量和总金额
+- 平均订单金额超过 200 的品类
+
+前端页面包含桌面、平板和手机响应式布局；生产构建命令为 `cd frontend && npm ci && npm run build`。
 
 ## 功能模块
 
@@ -45,6 +68,7 @@ python -m src.cli interactive
 | LLM 封装 | `src/llm_client.py` | DeepSeek API 调用 + Prompt 工程 |
 | 可视化 | `src/visualizer.py` | 根据查询结果自动生成图表 |
 | 命令行 | `src/cli.py` | 交互式 + 批量查询 |
+| HTTP API | `api/main.py` | 为 Web 前端提供结构化查询接口 |
 
 ## 技术栈
 
@@ -53,11 +77,17 @@ python -m src.cli interactive
 - DeepSeek API（LLM，兼容 OpenAI 接口格式）
 - pandas（数据处理）
 - matplotlib（可视化）
+- FastAPI（HTTP 服务）
+- React + TypeScript + Vite（Web 工作台）
 
 ## 项目结构
 
 ```
 dataquery-copilot/
+├── api/
+│   ├── main.py             # FastAPI HTTP 入口
+│   ├── models.py           # API 响应模型
+│   └── services.py         # 现有核心模块的 HTTP 适配层
 ├── src/
 │   ├── __init__.py
 │   ├── data_loader.py     # 数据接入层
@@ -67,8 +97,16 @@ dataquery-copilot/
 │   ├── visualizer.py      # 可视化输出
 │   └── cli.py             # 命令行（交互式 + 单次 + 批量）
 ├── scripts/
-│   └── generate_sample_data.py
-├── tests/                 # 单元测试（pytest，53 个用例）
+│   ├── generate_sample_data.py
+│   └── prepare_demo_db.py
+├── frontend/               # React + TypeScript 工作台
+│   ├── src/
+│   ├── .env.example        # 前端 API 地址配置示例
+│   └── package.json
+├── Dockerfile.api          # API 生产镜像
+├── render.yaml             # Render 前后端 Blueprint
+├── .github/workflows/      # CI 构建与 smoke test
+├── tests/                 # 单元测试（pytest，66 个用例）
 │   ├── conftest.py
 │   ├── test_data_loader.py
 │   ├── test_data_cleaner.py
@@ -96,8 +134,11 @@ dataquery-copilot/
 - [x] 可视化输出
 - [x] SQL 安全校验增强（词边界匹配 + 字符串/注释过滤）
 - [x] 批量查询 CLI（从文件读取 + 汇总报告）
-- [x] 单元测试（pytest，53 个测试用例）
+- [x] 单元测试（pytest，66 个测试用例）
 - [x] 性能优化（查询缓存 + SQL 自动重试 + 查询日志）
+- [x] React 工作台 v0 与核心交互
+- [x] 深浅主题、响应式和键盘交互
+- [x] 部署配置、健康检查和 CI 构建验证
 
 ## 高级功能
 
@@ -123,5 +164,9 @@ python -m src.cli batch questions.txt --output report.txt
 
 ### 单元测试
 ```bash
-python -m pytest tests/ -v   # 53 个测试用例
+python -m pytest tests/ -v   # 66 个测试用例
 ```
+
+### CI 检查
+
+GitHub Actions 会分别执行 API/可视化 smoke test 和 React 生产构建，配置文件为 `.github/workflows/ci.yml`。
