@@ -1,9 +1,17 @@
 """Prepare the demo SQLite database for a deployment build."""
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+# Direct script execution adds ``scripts``—not the repository root—to
+# ``sys.path``. Add the root explicitly so CI and deployment builds can import
+# the local ``src`` package without relying on an external PYTHONPATH.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data_loader import DataLoader
 
