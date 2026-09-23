@@ -36,8 +36,11 @@ class FakeLLM:
 @pytest.fixture
 def engine_with_mock(temp_db_path, sample_df):
     """QueryEngine 注入 FakeLLM"""
-    sample_df.to_sql("orders", sqlite3.connect(temp_db_path),
-                     if_exists="replace", index=False)
+    conn = sqlite3.connect(temp_db_path)
+    try:
+        sample_df.to_sql("orders", conn, if_exists="replace", index=False)
+    finally:
+        conn.close()
     eng = QueryEngine(db_path=temp_db_path, enable_cache=False, enable_log=False)
     eng.llm = FakeLLM()
     yield eng
@@ -154,8 +157,11 @@ def test_clear_cache(engine):
 
 def test_query_logging(temp_db_path, sample_df):
     """测试查询日志写入 JSONL"""
-    sample_df.to_sql("orders", sqlite3.connect(temp_db_path),
-                     if_exists="replace", index=False)
+    conn = sqlite3.connect(temp_db_path)
+    try:
+        sample_df.to_sql("orders", conn, if_exists="replace", index=False)
+    finally:
+        conn.close()
     eng = QueryEngine(db_path=temp_db_path, enable_cache=False, enable_log=True)
     eng.llm = FakeLLM("SELECT * FROM orders LIMIT 1")
     eng.ask("测试日志")
@@ -176,8 +182,11 @@ def test_query_logging(temp_db_path, sample_df):
 
 def test_logging_disabled(temp_db_path, sample_df):
     """测试禁用日志时不创建文件"""
-    sample_df.to_sql("orders", sqlite3.connect(temp_db_path),
-                     if_exists="replace", index=False)
+    conn = sqlite3.connect(temp_db_path)
+    try:
+        sample_df.to_sql("orders", conn, if_exists="replace", index=False)
+    finally:
+        conn.close()
     eng = QueryEngine(db_path=temp_db_path, enable_cache=False, enable_log=False)
     eng.llm = FakeLLM("SELECT 1")
     eng.ask("不应该记录")

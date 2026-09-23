@@ -60,8 +60,11 @@ def loader(temp_db_path, sample_df):
 @pytest.fixture
 def engine(temp_db_path, sample_df):
     """已加载数据、关闭日志和缓存的 QueryEngine"""
-    sample_df.to_sql("orders", sqlite3.connect(temp_db_path),
-                     if_exists="replace", index=False)
+    conn = sqlite3.connect(temp_db_path)
+    try:
+        sample_df.to_sql("orders", conn, if_exists="replace", index=False)
+    finally:
+        conn.close()
     eng = QueryEngine(db_path=temp_db_path, enable_cache=False, enable_log=False)
     yield eng
     eng.close()
