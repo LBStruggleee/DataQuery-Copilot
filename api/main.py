@@ -5,6 +5,8 @@ import uuid
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -62,6 +64,19 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @application.exception_handler(RequestValidationError)
+    async def validation_handler(request, exc):
+        """v1 路径的 Pydantic 校验失败包信封；非 v1 路径保持默认行为（v0 字节级兼容）。"""
+        if not request.url.path.startswith("/api/v1"):
+            return await request_validation_exception_handler(request, exc)
+        # 直接调 API 传非法分页等场景与问题校验共用 INVALID_QUESTION 422
+        errors = exc.errors() if hasattr(exc, "errors") else []
+        detail = errors[0].get("msg", "请求参数校验失败") if errors else "请求参数校验失败"
+        return JSONResponse(
+            status_code=422,
+            content=_envelope("INVALID_QUESTION", f"请求参数校验失败: {detail}", None, new_request_id()),
+        )
+
     @application.get("/api/health", response_model=HealthResponse, deprecated=True)
     def health(service: DataQueryService = Depends(get_query_service)):
         return service.health()
@@ -96,7 +111,11 @@ def create_app() -> FastAPI:
 
     @application.get("/api/v1/health", response_model=ApiEnvelope[HealthResponse])
     def health_v1(service: DataQueryService = Depends(get_query_service)):
-        return _envelope("OK", "ok", service.health(), new_request_id())
+        request_id = new_request_id()
+        try:
+            return _envelope("OK", "ok", service.health(), request_id)
+        except Exception:
+            return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "健康检查失败", None, request_id))
 
     @application.get("/api/v1/schema", response_model=ApiEnvelope[SchemaResponse])
     def schema_v1(service: DataQueryService = Depends(get_query_service)):

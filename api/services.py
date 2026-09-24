@@ -101,18 +101,20 @@ class DataQueryService:
             raise self._map_engine_error(result["error"])
 
         df = result["data"]
-        rows = self._records(df) if df is not None else []
-        truncated = len(rows) > V1_MAX_ROWS
-        visible = rows[:V1_MAX_ROWS]
-        total_pages = max(1, -(-len(visible) // page_size))
+        total = len(df) if df is not None else 0
+        truncated = total > V1_MAX_ROWS
+        frame = df.iloc[:V1_MAX_ROWS] if df is not None else None
+        rows = self._records(frame) if frame is not None else []
+        visible_count = len(frame) if frame is not None else 0
+        total_pages = max(1, -(-visible_count // page_size))
         safe_page = min(max(1, page), total_pages)
-        page_rows = visible[(safe_page - 1) * page_size:safe_page * page_size]
+        page_rows = rows[(safe_page - 1) * page_size:safe_page * page_size]
         return {
             "question": result["question"],
             "sql": result["sql"],
             "columns": list(df.columns) if df is not None else [],
             "rows": page_rows,
-            "row_count": len(visible),
+            "row_count": visible_count,
             "page": safe_page,
             "page_size": page_size,
             "total_pages": total_pages,
@@ -128,6 +130,8 @@ class DataQueryService:
     def _map_engine_error(error: str) -> APIError:
         if "安全校验" in error:
             return APIError(ErrorCode.SQL_REJECTED, 422, error)
+        if "no such table" in error:
+            return APIError(ErrorCode.TABLE_NOT_FOUND, 404, error)
         if "SQL 生成失败" in error or "自动修正失败" in error:
             return APIError(ErrorCode.SERVICE_UNAVAILABLE, 503, error)
         return APIError(ErrorCode.QUERY_FAILED, 500, error)

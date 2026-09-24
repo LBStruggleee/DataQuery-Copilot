@@ -104,6 +104,7 @@ def test_query_page_truncates_large_results(monkeypatch, tmp_path):
         ("SQL 安全校验未通过（仅允许 SELECT 语句）", "SQL_REJECTED"),
         ("SQL 生成失败: bad key", "SERVICE_UNAVAILABLE"),
         ("SQL 执行失败（已重试 2 次）: no such column", "QUERY_FAILED"),
+        ("SQL 执行失败（已重试 2 次）: no such table: archive", "TABLE_NOT_FOUND"),
     ],
 )
 def test_query_page_maps_engine_errors(monkeypatch, tmp_path, engine_error, code):
@@ -116,6 +117,66 @@ def test_query_page_maps_engine_errors(monkeypatch, tmp_path, engine_error, code
     with pytest.raises(APIError) as exc_info:
         service.query_page("q", True, 2, 1, 10)
     assert exc_info.value.code.value == code
+
+
+def test_query_page_truncates_before_convert(monkeypatch, tmp_path):
+    """终审 C1：截断必须发生在 to_dict 之前，_records 只应看到 ≤100 行。"""
+    import api.services as services_module
+    from api.services import DataQueryService
+
+    seen = []
+    orig_records = DataQueryService._records
+
+    def spy(df):
+        seen.append(len(df))
+        return orig_records(df)
+
+    monkeypatch.setattr(DataQueryService, "_records", staticmethod(spy))
+    _patch_engine(monkeypatch, frame=_big_frame(10000))
+    service = DataQueryService(str(tmp_path / "query.db"))
+
+    result = service.query_page("q", True, 2, 1, 10)
+
+    assert result["truncated"] is True
+    assert result["row_count"] == 100
+    assert seen == [100]
+
+
+def test_v1_validation_errors_use_envelope():
+    """终审 I1：Pydantic 校验失败也必须包信封。"""
+    from fastapi.testclient import TestClient
+
+    from api.main import create_app, get_query_service
+
+    app = create_app()
+    app.dependency_overrides[get_query_service] = FakeV1Service
+    with TestClient(app) as client:
+        empty = client.post("/api/v1/query", json={"question": ""})
+        bad_page = client.post("/api/v1/query", json={"question": "有效问题", "page": 0})
+
+    assert empty.status_code == 422
+    assert empty.json()["code"] == "INVALID_QUESTION"
+    assert bad_page.status_code == 422
+    assert bad_page.json()["version"] == "v1"
+
+
+def test_v1_health_wraps_unexpected_errors():
+    """终审 I2：health_v1 异常也必须包信封。"""
+    from fastapi.testclient import TestClient
+
+    from api.main import create_app, get_query_service
+
+    class ExplodingHealthService(FakeV1Service):
+        def health(self):
+            raise RuntimeError("boom")
+
+    app = create_app()
+    app.dependency_overrides[get_query_service] = ExplodingHealthService
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/v1/health")
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "QUERY_FAILED"
 
 
 class FakeV1Service:
