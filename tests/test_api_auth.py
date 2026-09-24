@@ -133,12 +133,6 @@ def test_v1_query_requires_key(authed_client):
     assert body["request_id"].startswith("req_")
 
 
-def test_v0_health_requires_key(authed_client):
-    response = authed_client.get("/api/health")
-    assert response.status_code == 401
-    assert response.json()["code"] == "AUTH_REQUIRED"
-
-
 def test_valid_key_passes(authed_client):
     response = authed_client.post(
         "/api/v1/query", json={"question": "有效问题"}, headers={"X-API-Key": authed_client.key}

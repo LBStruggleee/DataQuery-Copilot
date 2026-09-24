@@ -10,11 +10,10 @@ type Props = {
   status: QueryStatus;
   phase: QueryPhase;
   error: string | null;
-  demo: boolean;
-  /** v1 演示用：分页信息（缺省 = v0 行为，全量展示） */
+  /** 分页信息（缺省 = 全量展示） */
   paging?: { page: number; totalPages: number; truncated: boolean } | null;
   onPageChange?: (page: number) => void;
-  /** v1 演示用：统一错误码（缺省 = v0 行为，只显示文本） */
+  /** 统一错误码 */
   errorCode?: string | null;
 };
 
@@ -32,10 +31,11 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
-export function ResultsPanel({ result, status, phase, error, demo, paging, onPageChange, errorCode }: Props) {
+export function ResultsPanel({ result, status, phase, error, paging, onPageChange, errorCode }: Props) {
   const [tab, setTab] = useState<Tab>("table");
   const loading = status === "loading";
-  const empty = !loading && !error && result.rows.length === 0;
+  const idle = status === "idle";
+  const empty = !loading && !idle && !error && result.rows.length === 0;
 
   return (
     <section className="results-panel" aria-busy={loading}>
@@ -46,7 +46,6 @@ export function ResultsPanel({ result, status, phase, error, demo, paging, onPag
           <button className={tab === "sql" ? "is-active" : ""} type="button" onClick={() => setTab("sql")}><CodeIcon />SQL</button>
         </nav>
         <div className="result-summary">
-          {demo && <span className="demo-label">演示</span>}
           <span>{result.row_count} 行</span><span>{result.columns.length} 列</span><span>{result.execution_time.toFixed(3)}s</span>
         </div>
       </header>
@@ -60,6 +59,11 @@ export function ResultsPanel({ result, status, phase, error, demo, paging, onPag
         {paging?.truncated && !error && (
           <div className="result-state result-state--notice" role="status">
             <span>结果已截断<code className="error-code">RESULT_TRUNCATED</code></span><strong>超过 100 行上限，仅返回前 100 行，请加筛选条件后重试。</strong>
+          </div>
+        )}
+        {idle && !error && (
+          <div className="result-state" role="status">
+            <span>[ idle ]</span><strong>还没有查询</strong><p>在上方输入问题并运行，结果会显示在这里。</p>
           </div>
         )}
         {empty && (
@@ -83,7 +87,7 @@ export function ResultsPanel({ result, status, phase, error, demo, paging, onPag
                 ))}
               </tbody>
             </table>
-            <div className="table-footer"><span>{demo ? "演示快照 · 运行查询后替换为实时结果" : `问题：${result.question}`}</span>{paging && onPageChange ? (
+            <div className="table-footer"><span>{`问题：${result.question}`}</span>{paging && onPageChange ? (
               <span className="pager">
                 <span>{result.rows.length} / {result.row_count}</span>
                 <button type="button" onClick={() => onPageChange(paging.page - 1)} disabled={loading || paging.page <= 1}>上一页</button>

@@ -1,5 +1,5 @@
 /** v1 真实客户端：统一解信封、按码抛错、分页参数钳制。 */
-import type { HealthStatus, QualityInfo, SchemaInfo } from "../types";
+import type { HealthStatus, QualityInfo, QueryResponse, SchemaInfo } from "../types";
 import type { ApiEnvelope, DatasetInfo, ErrorCode, V1QueryData } from "./types";
 
 const V1_BASE = `${(import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "")}/api/v1`;
@@ -53,6 +53,8 @@ export async function fetchEnvelope<T>(path: string, init?: RequestInit): Promis
 
 export const DEFAULT_DATASET_ID = "orders";
 
+export const DEFAULT_PAGE_SIZE = 10;
+
 export function buildQueryBody(question: string, page: number, pageSize: number, dataset?: string) {
   const body: Record<string, unknown> = {
     question,
@@ -100,4 +102,21 @@ export async function uploadDatasetLive(file: File, signal?: AbortSignal): Promi
   const form = new FormData();
   form.append("file", file, file.name);
   return fetchEnvelope<DatasetInfo>("/datasets", { method: "POST", body: form, signal });
+}
+
+/** v1 数据 → 界面用的 QueryResponse。 */
+export function toQueryResponse(data: V1QueryData): QueryResponse {
+  return {
+    question: data.question,
+    sql: data.sql,
+    columns: data.columns,
+    rows: data.rows,
+    row_count: data.row_count,
+    chart_hint: data.chart_hint,
+    execution_time: data.execution_time,
+    valid: data.valid,
+    retries: data.retries,
+    from_cache: data.from_cache,
+    error: null,
+  };
 }

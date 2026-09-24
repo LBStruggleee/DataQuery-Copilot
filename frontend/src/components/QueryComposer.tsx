@@ -1,7 +1,6 @@
 import type { KeyboardEvent } from "react";
 
 import { ArrowIcon, SparkIcon } from "../icons";
-import { exampleQuestions } from "../mockData";
 import type { QueryPhase, QueryStatus } from "../types";
 
 type Props = {
@@ -11,9 +10,13 @@ type Props = {
   live: boolean;
   onQuestionChange: (question: string) => void;
   onSubmit: () => void;
-  /** 覆盖默认示例问题（v1 演示用） */
-  examples?: string[];
 };
+
+const defaultExamples = [
+  "各品类分地区销售统计",
+  "销售额前 5 的商品",
+  "各地区订单数量和总金额",
+];
 
 const phaseLabels: Record<QueryPhase, string> = {
   idle: "描述指标、维度和排序方式",
@@ -24,7 +27,7 @@ const phaseLabels: Record<QueryPhase, string> = {
   complete: "查询已完成",
 };
 
-export function QueryComposer({ question, status, phase, live, onQuestionChange, onSubmit, examples }: Props) {
+export function QueryComposer({ question, status, phase, live, onQuestionChange, onSubmit }: Props) {
   const loading = status === "loading";
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -65,7 +68,7 @@ export function QueryComposer({ question, status, phase, live, onQuestionChange,
 
       <div className="example-row">
         <span>试试这些</span>
-        {(examples ?? exampleQuestions).map((item) => (
+        {(defaultExamples).map((item) => (
           <button type="button" key={item} onClick={() => onQuestionChange(item)} disabled={loading}>{item}</button>
         ))}
       </div>

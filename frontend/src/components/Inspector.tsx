@@ -70,7 +70,7 @@ export function Inspector({ api, result, status, phase, error }: Props) {
       </section>
 
       <section className="inspector-section inspector-section--quality">
-        <div className="quality-heading"><div><span className="section-label">数据质量</span><strong>{api.quality?.total_rows.toLocaleString() ?? "5,000"} 行扫描完成</strong></div><span>{api.quality ? "实时" : "演示"}</span></div>
+        <div className="quality-heading"><div><span className="section-label">数据质量</span><strong>{api.quality?.total_rows.toLocaleString() ?? "—"} 行扫描完成</strong></div><span>{api.quality ? "实时" : "—"}</span></div>
         <div className="quality-grid">
           <div><strong>{missingCount}</strong><span>缺失值</span></div>
           <div><strong>{api.quality?.duplicates ?? 0}</strong><span>重复行</span></div>
@@ -80,7 +80,7 @@ export function Inspector({ api, result, status, phase, error }: Props) {
       </section>
 
       <footer className="inspector-footer">
-        <span>查询 ID</span><code>{status === "idle" ? "demo_snapshot" : `qry_${Math.abs(result.question.length * 7919).toString(16).slice(0, 8)}`}</code>
+        <span>查询 ID</span><code>{status === "idle" ? "—" : `qry_${Math.abs(result.question.length * 7919).toString(16).slice(0, 8)}`}</code>
       </footer>
     </aside>
   );

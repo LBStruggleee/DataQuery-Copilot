@@ -88,7 +88,6 @@ body::before {
 .topbar__context { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
 .topbar__context strong { color: var(--secondary); font-weight: 500; }
 .topbar__context i { font-style: normal; opacity: .45; }
-.v0-pill { border: 1px solid var(--border); padding: 2px 6px; border-radius: 5px; font: 11px var(--mono); color: var(--muted); }
 .topbar__actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 0 16px; }
 .connection-pill { display: flex; align-items: center; gap: 7px; color: var(--secondary); font-size: 12px; border: 1px solid var(--border); padding: 6px 9px; border-radius: 6px; background: rgba(255,255,255,.02); }
 .connection-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px rgba(85,185,147,.1); }
@@ -197,7 +196,6 @@ kbd { font: 10px var(--mono); color: var(--muted); background: rgba(255,255,255,
 .result-state p { margin: 0; color: var(--muted); font-size: 11px; }
 .result-state--error { align-items: start; padding: 30px; border-left: 2px solid var(--warning); text-align: left; background: rgba(215,165,92,.035); }
 .result-state--error > span { color: var(--warning); }
-.demo-label { color: var(--warning) !important; }
 .query-loading { position: absolute; inset: 47px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; background: color-mix(in srgb, var(--surface-1) 84%, transparent); backdrop-filter: blur(4px); z-index: 2; }
 .results-content { position: relative; }
 .query-loading strong { color: var(--secondary); font-size: 13px; font-weight: 500; }
@@ -366,7 +364,6 @@ td:first-child { color: var(--text); }
   .example-row button { min-height: 40px; padding-right: 10px; padding-left: 10px; }
   .results-panel { margin-top: 24px; }
   .result-summary { gap: 8px; padding-right: 10px; }
-  .result-summary .demo-label { display: none; }
   .result-summary span:nth-child(2) { display: none; }
   .tabs button { min-width: 62px; }
   th, td { padding: 0 11px; }
@@ -382,11 +379,7 @@ td:first-child { color: var(--text); }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
-/* v1 契约演示：版本切换、错误码、分页、截断提示 */
-.contract-toggle { display: inline-flex; gap: 4px; align-items: center; border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
-.contract-toggle button { border: 0; background: transparent; color: var(--muted); font-size: 11px; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
-.contract-toggle button.is-active { background: var(--accent-soft); color: var(--text); }
-.v1-pill { border: 1px solid rgba(124, 134, 232, .4); padding: 2px 6px; border-radius: 5px; font: 11px var(--mono); color: var(--accent); background: var(--accent-soft); }
+/* 统一错误码、分页、截断提示 */
 .error-code { font: 11px var(--mono); color: var(--warning); border: 1px solid rgba(215, 165, 92, .4); border-radius: 4px; padding: 1px 6px; margin-left: 8px; }
 .pager { display: inline-flex; align-items: center; gap: 8px; }
 .pager button { border: 1px solid var(--border); background: transparent; color: var(--secondary); font-size: 11px; border-radius: 5px; padding: 4px 10px; cursor: pointer; }

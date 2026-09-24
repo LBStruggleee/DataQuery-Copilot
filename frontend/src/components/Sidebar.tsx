@@ -12,12 +12,10 @@ type Props = {
   onRefresh: () => void;
   apiKey: string;
   onApiKeyChange: (key: string) => void;
-  showDatasets: boolean;
   datasets: DatasetInfo[];
   datasetId: string;
   onDatasetChange: (id: string) => void;
   onUploadFile: (file: File) => void;
-  uploadEnabled: boolean;
 };
 
 const defaultDatasetOption: DatasetInfo = {
@@ -31,7 +29,7 @@ const fallbackColumns = [
   ["order_status", "TEXT"],
 ];
 
-export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onApiKeyChange, showDatasets, datasets, datasetId, onDatasetChange, onUploadFile, uploadEnabled }: Props) {
+export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onApiKeyChange, datasets, datasetId, onDatasetChange, onUploadFile }: Props) {
   const columns = api.schema?.columns ?? fallbackColumns.map(([name, type]) => ({ name, type }));
   const [columnQuery, setColumnQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -72,7 +70,7 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
           <div><strong>{totalColumns}</strong><span>个字段</span></div>
           <div><strong>1</strong><span>张表</span></div>
         </div>
-        {showDatasets && (
+        {(
           <div className="dataset-switcher">
             <label className="dataset-select">
               <span>数据集</span>
@@ -82,13 +80,12 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
                 ))}
               </select>
             </label>
-            <label className={`upload-button ${uploadEnabled ? "" : "is-disabled"}`} title={uploadEnabled ? "上传 CSV/Excel（≤50MB）" : "连接真实后端后可上传"}>
+            <label className="upload-button" title="上传 CSV/Excel（≤50MB）">
               上传数据
               <input
                 type="file"
                 accept=".csv,.xls,.xlsx"
                 hidden
-                disabled={!uploadEnabled}
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   event.target.value = "";
@@ -96,7 +93,6 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
                 }}
               />
             </label>
-            {!uploadEnabled && <small>演示替身模式不支持上传</small>}
           </div>
         )}
       </section>
@@ -144,7 +140,7 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
 
       <footer className="sidebar-footer">
         {api.error ? (
-          <StatusDot tone="warning" label="API 未连接 · 使用演示数据" />
+          <StatusDot tone="warning" label="API 未连接" />
         ) : (
           <StatusDot tone={api.health?.database_ready ? "success" : "warning"} label={api.loading ? "正在连接数据服务" : "数据服务已连接"} />
         )}
