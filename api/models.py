@@ -60,6 +60,13 @@ class DatasetInfo(BaseModel):
     created_at: str
 
 
+class MetricsData(BaseModel):
+    requests_total: int
+    errors_total: int
+    query_requests: int
+    uptime_seconds: float
+
+
 class QueryDataV1(BaseModel):
     question: str
     sql: str

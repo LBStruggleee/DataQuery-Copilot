@@ -199,6 +199,33 @@ def test_v0_routes_removed():
         assert client.post("/api/query", json={"question": "有效问题"}).status_code == 404
 
 
+def test_v1_metrics_counts_requests_and_errors(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from api.auth import create_key
+    from api.main import create_app, get_query_service
+
+    db = str(tmp_path / "t.db")
+    monkeypatch.setenv("DB_PATH", db)
+    key = create_key(db, "pytest")
+    app = create_app()
+    app.dependency_overrides[get_query_service] = FakeV1Service
+    FakeV1Service._db_path = db
+    headers = {"X-API-Key": key}
+    with TestClient(app) as client:
+        assert client.get("/api/v1/metrics").status_code == 401
+        assert client.get("/api/v1/health", headers=headers).status_code == 200
+        assert client.post("/api/v1/query", headers=headers, json={"question": "   "}).status_code == 422
+        body = client.get("/api/v1/metrics", headers=headers).json()
+
+    assert body["code"] == "OK"
+    data = body["data"]
+    assert data["requests_total"] >= 3
+    assert data["errors_total"] >= 1
+    assert data["uptime_seconds"] >= 0
+    assert set(["requests_total", "errors_total", "query_requests", "uptime_seconds"]) <= set(data)
+
+
 def test_v1_query_sanitizes_engine_errors(tmp_path, monkeypatch, caplog):
     import logging
 

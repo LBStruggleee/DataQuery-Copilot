@@ -13,10 +13,12 @@ from fastapi.responses import JSONResponse
 from .auth import require_api_key
 from .datasets import list_datasets, register_upload, resolve_table
 from .errors import APIError
+from .metrics import MetricsMiddleware, record_query, snapshot
 from .models import (
     ApiEnvelope,
     DatasetInfo,
     HealthResponse,
+    MetricsData,
     QualityResponse,
     QueryDataV1,
     QueryRequestV1,
@@ -77,6 +79,7 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
+    application.add_middleware(MetricsMiddleware)
 
     @application.exception_handler(APIError)
     async def api_error_handler(request, exc):
@@ -141,6 +144,7 @@ def create_app() -> FastAPI:
         question = request.question.strip()
         if not question:
             return JSONResponse(status_code=422, content=_envelope("INVALID_QUESTION", "问题不能为空", None, request_id))
+        record_query()
         try:
             table = resolve_table(service.db_path, request.dataset)
             data = service.query_page(question, request.clean_result, request.max_retries, request.page, request.page_size, table_name=table)
@@ -161,6 +165,10 @@ def create_app() -> FastAPI:
             return _envelope("OK", "ok", list_datasets(service.db_path), request_id)
         except Exception:
             return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "数据集列表查询失败", None, request_id))
+
+    @application.get("/api/v1/metrics", response_model=ApiEnvelope[MetricsData])
+    def metrics_v1(_key: str = Depends(require_api_key)):
+        return _envelope("OK", "ok", snapshot(), new_request_id())
 
     @application.post("/api/v1/datasets", response_model=ApiEnvelope[DatasetInfo])
     async def upload_dataset_v1(service: DataQueryService = Depends(get_query_service),
