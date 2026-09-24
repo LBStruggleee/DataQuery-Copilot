@@ -1,6 +1,7 @@
 .env
 backups/
 .e2e/
+.soak/
 __pycache__/
 *.pyc
 data/*.db
