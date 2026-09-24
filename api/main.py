@@ -4,16 +4,18 @@ import os
 import uuid
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .auth import require_api_key
+from .datasets import list_datasets, register_upload, resolve_table
 from .errors import APIError
 from .models import (
     ApiEnvelope,
+    DatasetInfo,
     HealthResponse,
     QualityResponse,
     QueryDataV1,
@@ -133,21 +135,29 @@ def create_app() -> FastAPI:
 
     @application.get("/api/v1/schema", response_model=ApiEnvelope[SchemaResponse])
     def schema_v1(service: DataQueryService = Depends(get_query_service),
-                  _key: str = Depends(require_api_key)):
+                  _key: str = Depends(require_api_key),
+                  dataset: str | None = Query(default=None)):
         request_id = new_request_id()
         try:
-            return _envelope("OK", "ok", service.schema(), request_id)
+            table = resolve_table(service.db_path, dataset)
+            return _envelope("OK", "ok", service.schema(table), request_id)
         except ValueError as error:
             return JSONResponse(status_code=404, content=_envelope("TABLE_NOT_FOUND", str(error), None, request_id))
+        except APIError as error:
+            return JSONResponse(status_code=error.status, content=_envelope(error.code.value, error.message, None, request_id))
         except Exception:
             return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "表结构查询失败", None, request_id))
 
     @application.get("/api/v1/quality", response_model=ApiEnvelope[QualityResponse])
     def quality_v1(service: DataQueryService = Depends(get_query_service),
-                   _key: str = Depends(require_api_key)):
+                   _key: str = Depends(require_api_key),
+                   dataset: str | None = Query(default=None)):
         request_id = new_request_id()
         try:
-            return _envelope("OK", "ok", service.quality(), request_id)
+            table = resolve_table(service.db_path, dataset)
+            return _envelope("OK", "ok", service.quality(table), request_id)
+        except APIError as error:
+            return JSONResponse(status_code=error.status, content=_envelope(error.code.value, error.message, None, request_id))
         except Exception as error:
             return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "数据质量检查失败", None, request_id))
 
@@ -159,13 +169,37 @@ def create_app() -> FastAPI:
         if not question:
             return JSONResponse(status_code=422, content=_envelope("INVALID_QUESTION", "问题不能为空", None, request_id))
         try:
-            data = service.query_page(question, request.clean_result, request.max_retries, request.page, request.page_size)
+            table = resolve_table(service.db_path, request.dataset)
+            data = service.query_page(question, request.clean_result, request.max_retries, request.page, request.page_size, table_name=table)
         except APIError as error:
             return JSONResponse(status_code=error.status, content=_envelope(error.code.value, error.message, None, request_id))
         except Exception:
             return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "查询服务执行失败", None, request_id))
         message = "结果超过 100 行上限，仅返回前 100 行" if data["truncated"] else "ok"
         return _envelope("OK", message, data, request_id)
+
+    @application.get("/api/v1/datasets", response_model=ApiEnvelope[list[DatasetInfo]])
+    def datasets_v1(service: DataQueryService = Depends(get_query_service),
+                    _key: str = Depends(require_api_key)):
+        request_id = new_request_id()
+        try:
+            return _envelope("OK", "ok", list_datasets(service.db_path), request_id)
+        except Exception:
+            return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "数据集列表查询失败", None, request_id))
+
+    @application.post("/api/v1/datasets", response_model=ApiEnvelope[DatasetInfo])
+    async def upload_dataset_v1(service: DataQueryService = Depends(get_query_service),
+                                _key: str = Depends(require_api_key),
+                                file: UploadFile = File(...)):
+        request_id = new_request_id()
+        try:
+            content = await file.read()
+            info = register_upload(service.db_path, file.filename or "upload.csv", content)
+            return _envelope("OK", "ok", info, request_id)
+        except APIError as error:
+            return JSONResponse(status_code=error.status, content=_envelope(error.code.value, error.message, None, request_id))
+        except Exception:
+            return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "文件上传失败", None, request_id))
 
     return application
 

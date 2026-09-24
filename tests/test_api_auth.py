@@ -107,7 +107,11 @@ def authed_client(tmp_path, monkeypatch):
     key = create_key(db, "ci")
 
     class FakeService:
-        def query_page(self, question, clean_result, max_retries, page, page_size):
+        @property
+        def db_path(self):
+            return db
+
+        def query_page(self, question, clean_result, max_retries, page, page_size, table_name=None):
             return {"question": question, "sql": "SELECT 1", "columns": ["a"], "rows": [{"a": 1}],
                     "row_count": 1, "page": 1, "page_size": 10, "total_pages": 1,
                     "truncated": False, "chart_hint": "table", "execution_time": 0.01,

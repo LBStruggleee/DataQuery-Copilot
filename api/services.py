@@ -36,18 +36,20 @@ class DataQueryService:
             "llm_configured": llm_configured,
         }
 
-    def schema(self) -> dict:
+    def schema(self, table_name: str | None = None) -> dict:
+        table = table_name or self.table_name
         with DataLoader(self.db_path) as loader:
-            info = loader.get_table_info(self.table_name)
+            info = loader.get_table_info(table)
         if not info["columns"]:
-            raise ValueError(f"数据表不存在: {self.table_name}")
+            raise ValueError(f"数据表不存在: {table}")
         return info
 
-    def quality(self) -> dict:
+    def quality(self, table_name: str | None = None) -> dict:
+        table = table_name or self.table_name
         with DataLoader(self.db_path) as loader:
-            df = loader.execute_query(f'SELECT * FROM "{self.table_name}" LIMIT 10000')
+            df = loader.execute_query(f'SELECT * FROM "{table}" LIMIT 10000')
         report = DataCleaner().quality_report(df)
-        return {"table_name": self.table_name, **report}
+        return {"table_name": table, **report}
 
     def query(self, question: str, clean_result: bool, max_retries: int) -> dict:
         with QueryEngine(
@@ -88,11 +90,13 @@ class DataQueryService:
         except Exception:
             return False
 
-    def query_page(self, question: str, clean_result: bool, max_retries: int, page: int, page_size: int) -> dict:
+    def query_page(self, question: str, clean_result: bool, max_retries: int, page: int, page_size: int,
+                   table_name: str | None = None) -> dict:
         """v1 分页查询：失败抛 APIError，超限截断。"""
+        table = table_name or self.table_name
         with QueryEngine(
             db_path=self.db_path,
-            table_name=self.table_name,
+            table_name=table,
             enable_cache=False,
         ) as engine:
             result = engine.ask(question, clean_result=clean_result, max_retries=max_retries)

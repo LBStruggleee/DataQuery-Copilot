@@ -188,6 +188,11 @@ def test_v1_health_wraps_unexpected_errors(tmp_path, monkeypatch):
 
 
 class FakeV1Service:
+    _db_path = "data/query.db"
+
+    @property
+    def db_path(self):
+        return self._db_path
     def health(self):
         return {"status": "ok", "database_ready": True, "llm_configured": False}
 
@@ -198,7 +203,7 @@ class FakeV1Service:
         return {"table_name": "orders", "total_rows": 10, "total_columns": 1,
                 "missing_values": {}, "duplicates": 0, "column_types": {"category": "str"}}
 
-    def query_page(self, question, clean_result, max_retries, page, page_size):
+    def query_page(self, question, clean_result, max_retries, page, page_size, table_name=None):
         from api.errors import APIError, ErrorCode
 
         if question == "触发拒绝":
@@ -220,6 +225,7 @@ def v1_client(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", db)
     key = create_key(db, "pytest")
     app = create_app()
+    FakeV1Service._db_path = db
     app.dependency_overrides[get_query_service] = FakeV1Service
     with TestClient(app, headers={"X-API-Key": key}) as test_client:
         yield test_client

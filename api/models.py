@@ -69,6 +69,15 @@ class QueryRequestV1(BaseModel):
     max_retries: int = Field(default=2, ge=0, le=3)
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=10, ge=1, le=50)
+    dataset: str | None = Field(default=None, description="数据集 id，缺省为默认 orders 表")
+
+
+class DatasetInfo(BaseModel):
+    id: str
+    name: str
+    table_name: str
+    rows: int
+    created_at: str
 
 
 class QueryDataV1(BaseModel):
