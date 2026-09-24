@@ -11,7 +11,9 @@ export type ErrorCode =
   | "QUERY_TIMEOUT"
   | "RESULT_TRUNCATED"
   | "SERVICE_UNAVAILABLE"
-  | "QUERY_FAILED";
+  | "QUERY_FAILED"
+  | "AUTH_REQUIRED"
+  | "RATE_LIMITED";
 
 export interface ApiEnvelope<T> {
   version: typeof API_VERSION;

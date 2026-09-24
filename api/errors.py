@@ -12,6 +12,9 @@ class ErrorCode(str, Enum):
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
     # proposal 表外补充：查询路径执行失败与未知异常的 500 兜底
     QUERY_FAILED = "QUERY_FAILED"
+    # 成品化阶段一：鉴权与限流
+    AUTH_REQUIRED = "AUTH_REQUIRED"
+    RATE_LIMITED = "RATE_LIMITED"
 
 
 class APIError(Exception):
