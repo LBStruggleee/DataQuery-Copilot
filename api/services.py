@@ -14,6 +14,10 @@ from src.data_loader import DataLoader
 from src.query_engine import QueryEngine
 from src.visualizer import Visualizer
 
+from .errors import APIError, ErrorCode
+
+V1_MAX_ROWS = 100
+
 
 class DataQueryService:
     def __init__(self, db_path: str, table_name: str = "orders"):
@@ -83,6 +87,50 @@ class DataQueryService:
             return bool(self.schema()["columns"])
         except Exception:
             return False
+
+    def query_page(self, question: str, clean_result: bool, max_retries: int, page: int, page_size: int) -> dict:
+        """v1 分页查询：失败抛 APIError，超限截断。"""
+        with QueryEngine(
+            db_path=self.db_path,
+            table_name=self.table_name,
+            enable_cache=False,
+        ) as engine:
+            result = engine.ask(question, clean_result=clean_result, max_retries=max_retries)
+
+        if result["error"]:
+            raise self._map_engine_error(result["error"])
+
+        df = result["data"]
+        rows = self._records(df) if df is not None else []
+        truncated = len(rows) > V1_MAX_ROWS
+        visible = rows[:V1_MAX_ROWS]
+        total_pages = max(1, -(-len(visible) // page_size))
+        safe_page = min(max(1, page), total_pages)
+        page_rows = visible[(safe_page - 1) * page_size:safe_page * page_size]
+        return {
+            "question": result["question"],
+            "sql": result["sql"],
+            "columns": list(df.columns) if df is not None else [],
+            "rows": page_rows,
+            "row_count": len(visible),
+            "page": safe_page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "truncated": truncated,
+            "chart_hint": Visualizer.detect_chart_type(df) if df is not None else "table",
+            "execution_time": result["execution_time"],
+            "valid": result["valid"],
+            "retries": result["retries"],
+            "from_cache": result["from_cache"],
+        }
+
+    @staticmethod
+    def _map_engine_error(error: str) -> APIError:
+        if "安全校验" in error:
+            return APIError(ErrorCode.SQL_REJECTED, 422, error)
+        if "SQL 生成失败" in error or "自动修正失败" in error:
+            return APIError(ErrorCode.SERVICE_UNAVAILABLE, 503, error)
+        return APIError(ErrorCode.QUERY_FAILED, 500, error)
 
     @classmethod
     def _records(cls, df: pd.DataFrame) -> list[dict[str, Any]]:
