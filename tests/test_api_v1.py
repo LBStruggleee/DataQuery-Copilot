@@ -187,6 +187,49 @@ def test_v1_health_wraps_unexpected_errors(tmp_path, monkeypatch):
     assert response.json()["code"] == "QUERY_FAILED"
 
 
+def test_v0_routes_removed():
+    from fastapi.testclient import TestClient
+
+    from api.main import create_app
+
+    with TestClient(create_app()) as client:
+        assert client.get("/api/health").status_code == 404
+        assert client.get("/api/schema").status_code == 404
+        assert client.get("/api/quality").status_code == 404
+        assert client.post("/api/query", json={"question": "有效问题"}).status_code == 404
+
+
+def test_v1_query_sanitizes_engine_errors(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from fastapi.testclient import TestClient
+
+    from api.auth import create_key
+    from api.errors import APIError, ErrorCode
+    from api.main import create_app, get_query_service
+
+    class LeakyService(FakeV1Service):
+        def query_page(self, *args, **kwargs):
+            raise APIError(ErrorCode.SQL_REJECTED, 422, "SQL 安全校验未通过：DROP TABLE secret_schema")
+
+    db = str(tmp_path / "t.db")
+    monkeypatch.setenv("DB_PATH", db)
+    key = create_key(db, "pytest")
+    app = create_app()
+    app.dependency_overrides[get_query_service] = LeakyService
+    with TestClient(app, headers={"X-API-Key": key}) as client:
+        with caplog.at_level(logging.WARNING, logger="api.main"):
+            response = client.post("/api/v1/query", json={"question": "删库"})
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "SQL_REJECTED"
+    assert "secret_schema" not in body["message"]
+    assert body["request_id"].startswith("req_")
+    logged = [r for r in caplog.records if getattr(r, "request_id", None) == body["request_id"]]
+    assert logged and "secret_schema" in logged[0].detail
+
+
 class FakeV1Service:
     _db_path = "data/query.db"
 

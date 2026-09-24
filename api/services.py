@@ -51,37 +51,6 @@ class DataQueryService:
         report = DataCleaner().quality_report(df)
         return {"table_name": table, **report}
 
-    def query(self, question: str, clean_result: bool, max_retries: int) -> dict:
-        with QueryEngine(
-            db_path=self.db_path,
-            table_name=self.table_name,
-            enable_cache=False,
-        ) as engine:
-            result = engine.ask(
-                question,
-                clean_result=clean_result,
-                max_retries=max_retries,
-            )
-
-        df = result["data"]
-        columns = list(df.columns) if df is not None else []
-        rows = self._records(df) if df is not None else []
-        chart_hint = Visualizer.detect_chart_type(df) if df is not None else "table"
-
-        return {
-            "question": result["question"],
-            "sql": result["sql"],
-            "columns": columns,
-            "rows": rows,
-            "row_count": result["row_count"],
-            "chart_hint": chart_hint,
-            "execution_time": result["execution_time"],
-            "valid": result["valid"],
-            "retries": result["retries"],
-            "from_cache": result["from_cache"],
-            "error": result["error"],
-        }
-
     def _database_ready(self) -> bool:
         if not Path(self.db_path).is_file():
             return False

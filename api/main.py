@@ -1,11 +1,11 @@
 """FastAPI entry point for the DataQuery Copilot web client."""
 
+import logging
 import os
 import uuid
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi import Depends, FastAPI, File, Query, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -19,14 +19,25 @@ from .models import (
     HealthResponse,
     QualityResponse,
     QueryDataV1,
-    QueryRequest,
     QueryRequestV1,
-    QueryResponse,
     SchemaResponse,
 )
 from .services import DataQueryService
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# engine 原文只进服务端日志；客户端一律收通用文案（request_id 关联两端）
+_SAFE_MESSAGES = {
+    "SQL_REJECTED": "SQL 安全校验未通过",
+    "SERVICE_UNAVAILABLE": "服务暂不可用，请稍后重试",
+    "QUERY_FAILED": "查询服务执行失败",
+}
+
+
+def _public_message(code: str, detail: str) -> str:
+    return _SAFE_MESSAGES.get(code, detail)
 
 
 def get_query_service() -> DataQueryService:
@@ -77,9 +88,7 @@ def create_app() -> FastAPI:
 
     @application.exception_handler(RequestValidationError)
     async def validation_handler(request, exc):
-        """v1 路径的 Pydantic 校验失败包信封；非 v1 路径保持默认行为（v0 字节级兼容）。"""
-        if not request.url.path.startswith("/api/v1"):
-            return await request_validation_exception_handler(request, exc)
+        """Pydantic 校验失败包信封。"""
         # 直接调 API 传非法分页等场景与问题校验共用 INVALID_QUESTION 422
         errors = exc.errors() if hasattr(exc, "errors") else []
         detail = errors[0].get("msg", "请求参数校验失败") if errors else "请求参数校验失败"
@@ -87,42 +96,6 @@ def create_app() -> FastAPI:
             status_code=422,
             content=_envelope("INVALID_QUESTION", f"请求参数校验失败: {detail}", None, new_request_id()),
         )
-
-    @application.get("/api/health", response_model=HealthResponse, deprecated=True)
-    def health(service: DataQueryService = Depends(get_query_service),
-               _key: str = Depends(require_api_key)):
-        return service.health()
-
-    @application.get("/api/schema", response_model=SchemaResponse, deprecated=True)
-    def schema(service: DataQueryService = Depends(get_query_service),
-               _key: str = Depends(require_api_key)):
-        try:
-            return service.schema()
-        except ValueError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-
-    @application.get("/api/quality", response_model=QualityResponse, deprecated=True)
-    def quality(service: DataQueryService = Depends(get_query_service),
-                _key: str = Depends(require_api_key)):
-        try:
-            return service.quality()
-        except Exception as error:
-            raise HTTPException(status_code=500, detail="数据质量检查失败") from error
-
-    @application.post("/api/query", response_model=QueryResponse, deprecated=True)
-    def query(
-        request: QueryRequest,
-        service: DataQueryService = Depends(get_query_service),
-        _key: str = Depends(require_api_key),
-    ):
-        try:
-            return service.query(
-                question=request.question.strip(),
-                clean_result=request.clean_result,
-                max_retries=request.max_retries,
-            )
-        except Exception as error:
-            raise HTTPException(status_code=500, detail="查询服务执行失败") from error
 
     @application.get("/api/v1/health", response_model=ApiEnvelope[HealthResponse])
     def health_v1(service: DataQueryService = Depends(get_query_service),
@@ -172,8 +145,10 @@ def create_app() -> FastAPI:
             table = resolve_table(service.db_path, request.dataset)
             data = service.query_page(question, request.clean_result, request.max_retries, request.page, request.page_size, table_name=table)
         except APIError as error:
-            return JSONResponse(status_code=error.status, content=_envelope(error.code.value, error.message, None, request_id))
+            logger.warning("v1 query failed", extra={"request_id": request_id, "code": error.code.value, "detail": error.message})
+            return JSONResponse(status_code=error.status, content=_envelope(error.code.value, _public_message(error.code.value, error.message), None, request_id))
         except Exception:
+            logger.warning("v1 query failed", extra={"request_id": request_id, "code": "QUERY_FAILED"})
             return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "查询服务执行失败", None, request_id))
         message = "结果超过 100 行上限，仅返回前 100 行" if data["truncated"] else "ok"
         return _envelope("OK", message, data, request_id)
