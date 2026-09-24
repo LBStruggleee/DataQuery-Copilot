@@ -7,7 +7,15 @@ __pycache__
 .pytest_cache
 frontend/node_modules
 frontend/dist
+frontend/e2e/test-results
+frontend/playwright-report
+frontend/test-results
 logs
 output
+data/
+backups/
+.e2e/
+.soak/
+*.db
 *.db-wal
 *.db-shm
