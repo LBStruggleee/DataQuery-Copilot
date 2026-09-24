@@ -177,6 +177,15 @@ python scripts/manage_keys.py revoke <明文Key>
 前端在左侧栏底部「访问密钥」处填入 Key（存浏览器本地）。无 Key 调接口返回 401 `AUTH_REQUIRED`，
 超频/配额耗尽返回 429 `RATE_LIMITED`。限流为单进程内存实现（默认单 worker 足够）。
 
+### 数据集与备份
+- 前端左侧栏可下拉切换数据集，上传 CSV/Excel（≤50MB）后自动入库并出现在列表中。
+- 备份与恢复演练：
+```bash
+python scripts/backup_db.py --db data/query.db --dir backups --keep 7
+cp backups/query_<timestamp>.db /tmp/restored.db
+python -c "import sqlite3; print(sqlite3.connect('/tmp/restored.db').execute('SELECT COUNT(*) FROM orders').fetchone())"
+```
+
 ### CI 检查
 
 GitHub Actions 会分别执行 API/可视化 smoke test 和 React 生产构建，配置文件为 `.github/workflows/ci.yml`。

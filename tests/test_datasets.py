@@ -1,6 +1,7 @@
 """Phase 2: 数据集注册表、上传入库、作用域查询、备份。"""
 
 import io
+import os
 
 import pandas as pd
 import pytest
@@ -61,6 +62,33 @@ def test_resolve_table(tmp_path):
     with pytest.raises(APIError) as exc_info:
         resolve_table(db, "nope")
     assert exc_info.value.code.value == "TABLE_NOT_FOUND"
+
+
+def test_backup_and_restore(tmp_path):
+    import sqlite3
+
+    from scripts.backup_db import backup_db
+
+    src = str(tmp_path / "query.db")
+    conn = sqlite3.connect(src)
+    conn.execute("CREATE TABLE orders (a TEXT)")
+    conn.execute("INSERT INTO orders VALUES ('x')")
+    conn.commit()
+    conn.close()
+
+    backup_dir = str(tmp_path / "backups")
+    path = backup_db(src, backup_dir, keep=2)
+    assert os.path.exists(path)
+
+    restored = str(tmp_path / "restored.db")
+    import shutil
+
+    shutil.copy(path, restored)
+    conn = sqlite3.connect(restored)
+    try:
+        assert conn.execute("SELECT * FROM orders").fetchall() == [("x",)]
+    finally:
+        conn.close()
 
 
 def test_query_page_scoped_table(monkeypatch, tmp_path):
