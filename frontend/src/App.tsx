@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { loadWorkspaceOverview, runQuery } from "./api";
 import { BrandMark } from "./components/BrandMark";
@@ -8,6 +8,7 @@ import { ResultsPanel } from "./components/ResultsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { V1_EXAMPLE_QUESTIONS, V1_PAGE_SIZE, loadWorkspaceOverviewV1, runQueryV1, toLegacyResponse } from "./contractV1/mockClient";
 import type { V1Paging } from "./contractV1/types";
+import { V1ApiError, loadWorkspaceOverviewV1Live, runQueryV1Live } from "./apiV1/client";
 import { GithubIcon, ThemeIcon } from "./icons";
 import { demoQueryResponse } from "./mockData";
 import type { ApiState, QueryHistoryItem, QueryPhase, QueryResponse, QueryStatus } from "./types";
@@ -47,6 +48,10 @@ export default function App() {
   const [contract, setContract] = useState<ContractMode>(readContractMode);
   const [paging, setPaging] = useState<V1Paging | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [v1Source, setV1Source] = useState<"live" | "mock">("live");
+  const forceMock = useMemo(() => {
+    try { return new URLSearchParams(window.location.search).get("mock") === "1"; } catch { return false; }
+  }, []);
   const [theme, setTheme] = useState<ThemeMode>(() => {
     try { return localStorage.getItem("dataquery-copilot.theme") === "light" ? "light" : "dark"; } catch { return "dark"; }
   });
@@ -55,6 +60,17 @@ export default function App() {
     setApi((current) => ({ ...current, loading: true, error: null }));
     try {
       if (contract === "v1") {
+        if (!forceMock) {
+          try {
+            const live = await loadWorkspaceOverviewV1Live();
+            setApi({ health: live.health, schema: live.schema, quality: live.quality, loading: false, error: null });
+            setV1Source("live");
+            return;
+          } catch (error) {
+            if (!(error instanceof TypeError)) throw error;
+            // 网络失败 → 回退 mock 替身
+          }
+        }
         const overview = await loadWorkspaceOverviewV1();
         if (overview.health.code !== "OK" || !overview.health.data) throw new Error(overview.health.message);
         setApi({
@@ -64,6 +80,7 @@ export default function App() {
           loading: false,
           error: null,
         });
+        setV1Source("mock");
         return;
       }
       const overview = await loadWorkspaceOverview();
@@ -129,7 +146,35 @@ export default function App() {
     }, 650);
 
     try {
+      if (!forceMock) {
+        try {
+          const live = await runQueryV1Live(trimmed, nextPage, V1_PAGE_SIZE);
+          const nextResult = toLegacyResponse(live.data);
+          setResult(nextResult);
+          setIsDemo(false);
+          setPaging({ page: live.data.page, totalPages: live.data.total_pages, truncated: live.data.truncated });
+          setV1Source("live");
+          setQueryStatus("success");
+          setPhase("complete");
+          rememberQuery(nextResult, "success");
+          return;
+        } catch (error) {
+          if (error instanceof TypeError) {
+            // 网络失败 → 回退 mock 替身
+          } else {
+            const code = error instanceof V1ApiError ? error.code : "SERVICE_UNAVAILABLE";
+            const message = error instanceof Error ? error.message : "查询服务执行失败";
+            setQueryStatus("error");
+            setQueryError(message);
+            setErrorCode(code);
+            setV1Source("live");
+            rememberQuery({ ...result, question: trimmed, error: message }, "error");
+            return;
+          }
+        }
+      }
       const envelope = await runQueryV1(trimmed, nextPage, V1_PAGE_SIZE);
+      setV1Source("mock");
       if (envelope.code !== "OK" || !envelope.data) {
         setQueryStatus("error");
         setQueryError(envelope.message);
@@ -215,10 +260,10 @@ export default function App() {
             <button type="button" className={contract === "v0" ? "is-active" : ""} onClick={() => switchContract("v0")}>v0 现状</button>
             <button type="button" className={contract === "v1" ? "is-active" : ""} onClick={() => switchContract("v1")}>v1 演示</button>
           </span>
-          {contract === "v1" ? <span className="v1-pill">v1 · mock</span> : <span className="v0-pill">v0</span>}
+          {contract === "v1" ? <span className="v1-pill">{v1Source === "live" ? "v1 · 真实" : "v1 · mock替身"}</span> : <span className="v0-pill">v0</span>}
         </div>
         <div className="topbar__actions">
-          <span className={`connection-pill ${api.error || !live ? "is-offline" : ""}`}><i />{contract === "v1" ? "v1 演示 · mock" : api.error ? "演示模式" : live ? "API 已连接" : "等待配置"}</span>
+          <span className={`connection-pill ${api.error || !live || (contract === "v1" && v1Source === "mock") ? "is-offline" : ""}`}><i />{contract === "v1" && v1Source === "mock" ? "v1 演示 · mock" : api.error ? "演示模式" : live ? "API 已连接" : "等待配置"}</span>
           <button className="icon-button" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} title={theme === "dark" ? "浅色主题" : "深色主题"}><ThemeIcon /></button>
           <a className="icon-button" href="https://github.com/LBStruggleee/DataQuery-Copilot" target="_blank" rel="noreferrer" aria-label="打开 GitHub 仓库" title="打开 GitHub 仓库"><GithubIcon /></a>
           <div className="avatar" aria-label="用户 LB">LB</div>
