@@ -2,6 +2,7 @@
 
 import logging
 import os
+import sys
 import uuid
 
 from dotenv import load_dotenv
@@ -13,6 +14,7 @@ from fastapi.responses import JSONResponse
 from .auth import require_api_key
 from .datasets import list_datasets, register_upload, resolve_table
 from .errors import APIError
+from .logjson import JsonFormatter
 from .metrics import MetricsMiddleware, record_query, snapshot
 from .models import (
     ApiEnvelope,
@@ -58,6 +60,13 @@ def _envelope(code: str, message: str, data, request_id: str) -> dict:
 
 
 def create_app() -> FastAPI:
+    if os.getenv("DQC_JSON_LOGS") == "1":
+        api_logger = logging.getLogger("api")
+        if not any(isinstance(h, logging.StreamHandler) and isinstance(h.formatter, JsonFormatter)
+                   for h in api_logger.handlers):
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setFormatter(JsonFormatter())
+            api_logger.addHandler(handler)
     application = FastAPI(
         title="DataQuery Copilot API",
         version="0.1.0",
