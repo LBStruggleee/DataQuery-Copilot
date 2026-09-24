@@ -164,8 +164,18 @@ python -m src.cli batch questions.txt --output report.txt
 
 ### 单元测试
 ```bash
-python -m pytest tests/ -v   # 66 个测试用例
+python -m pytest tests/ -v   # 后端测试
 ```
+
+### 访问控制（API Key）
+所有 `/api/*` 接口要求 `X-API-Key` 请求头。签发与吊销在服务器上执行：
+```bash
+python scripts/manage_keys.py create --name <用途> [--quota 200]  # 明文只显示一次
+python scripts/manage_keys.py list
+python scripts/manage_keys.py revoke <明文Key>
+```
+前端在左侧栏底部「访问密钥」处填入 Key（存浏览器本地）。无 Key 调接口返回 401 `AUTH_REQUIRED`，
+超频/配额耗尽返回 429 `RATE_LIMITED`。限流为单进程内存实现（默认单 worker 足够）。
 
 ### CI 检查
 

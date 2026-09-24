@@ -141,3 +141,30 @@ def test_valid_key_passes(authed_client):
     )
     assert response.status_code == 200
     assert response.json()["code"] == "OK"
+
+
+def test_manage_keys_cli(tmp_path):
+    import subprocess
+    import sys
+
+    db = str(tmp_path / "t.db")
+    created = subprocess.run(
+        [sys.executable, "scripts/manage_keys.py", "--db", db, "create", "--name", "ci"],
+        capture_output=True, text=True, cwd="D:/DataQuery-Copilot",
+    )
+    assert created.returncode == 0
+    key = created.stdout.strip().splitlines()[-1]
+    assert key.startswith("dqc_")
+
+    listed = subprocess.run(
+        [sys.executable, "scripts/manage_keys.py", "--db", db, "list"],
+        capture_output=True, text=True, cwd="D:/DataQuery-Copilot",
+    )
+    assert listed.returncode == 0
+    assert "ci" in listed.stdout
+
+    revoked = subprocess.run(
+        [sys.executable, "scripts/manage_keys.py", "--db", db, "revoke", key],
+        capture_output=True, text=True, cwd="D:/DataQuery-Copilot",
+    )
+    assert revoked.returncode == 0
