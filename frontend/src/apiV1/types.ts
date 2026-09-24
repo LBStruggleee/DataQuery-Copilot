@@ -39,3 +39,11 @@ export interface V1QueryData {
   retries: number;
   from_cache: boolean;
 }
+
+export interface DatasetInfo {
+  id: string;
+  name: string;
+  table_name: string;
+  rows: number;
+  created_at: string;
+}

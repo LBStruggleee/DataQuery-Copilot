@@ -402,3 +402,12 @@ td:first-child { color: var(--text); }
 .key-field input::placeholder { color: var(--muted); }
 .key-field button { border: 0; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; padding: 6px; }
 .key-field button:hover { color: var(--text); }
+
+/* 数据集切换与上传 */
+.dataset-switcher { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.dataset-select { display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: var(--muted); }
+.dataset-select select { height: 34px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text); font-size: 12px; padding: 0 8px; outline: none; }
+.upload-button { display: inline-flex; align-items: center; justify-content: center; height: 32px; border: 1px dashed var(--border-strong); border-radius: 6px; color: var(--secondary); font-size: 12px; cursor: pointer; }
+.upload-button:hover { border-color: var(--accent); color: var(--text); }
+.upload-button.is-disabled { opacity: .45; cursor: not-allowed; }
+.dataset-switcher small { color: var(--muted); font-size: 10px; }

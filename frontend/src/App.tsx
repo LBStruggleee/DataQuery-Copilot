@@ -6,9 +6,10 @@ import { Inspector } from "./components/Inspector";
 import { QueryComposer } from "./components/QueryComposer";
 import { ResultsPanel } from "./components/ResultsPanel";
 import { Sidebar } from "./components/Sidebar";
-import { V1_EXAMPLE_QUESTIONS, V1_PAGE_SIZE, loadWorkspaceOverviewV1, runQueryV1, toLegacyResponse } from "./contractV1/mockClient";
+import { V1_EXAMPLE_QUESTIONS, V1_PAGE_SIZE, listDatasetsV1, loadWorkspaceOverviewV1, runQueryV1, toLegacyResponse, uploadDatasetV1 } from "./contractV1/mockClient";
 import type { V1Paging } from "./contractV1/types";
-import { API_KEY_STORAGE_KEY, V1ApiError, loadWorkspaceOverviewV1Live, runQueryV1Live } from "./apiV1/client";
+import { API_KEY_STORAGE_KEY, V1ApiError, listDatasetsLive, loadWorkspaceOverviewV1Live, runQueryV1Live, uploadDatasetLive } from "./apiV1/client";
+import type { DatasetInfo } from "./apiV1/types";
 import { GithubIcon, ThemeIcon } from "./icons";
 import { demoQueryResponse } from "./mockData";
 import type { ApiState, QueryHistoryItem, QueryPhase, QueryResponse, QueryStatus } from "./types";
@@ -49,6 +50,8 @@ export default function App() {
   const [paging, setPaging] = useState<V1Paging | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [v1Source, setV1Source] = useState<"live" | "mock">("live");
+  const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
+  const [datasetId, setDatasetId] = useState("orders");
   const [apiKey, setApiKey] = useState(() => {
     try { return localStorage.getItem(API_KEY_STORAGE_KEY) ?? ""; } catch { return ""; }
   });
@@ -65,7 +68,11 @@ export default function App() {
       if (contract === "v1") {
         if (!forceMock) {
           try {
-            const live = await loadWorkspaceOverviewV1Live();
+            const [live, ds] = await Promise.all([
+              loadWorkspaceOverviewV1Live(undefined, datasetId),
+              listDatasetsLive(),
+            ]);
+            setDatasets(ds.data);
             setApi({ health: live.health, schema: live.schema, quality: live.quality, loading: false, error: null });
             setV1Source("live");
             return;
@@ -74,8 +81,12 @@ export default function App() {
             // 网络失败 → 回退 mock 替身
           }
         }
-        const overview = await loadWorkspaceOverviewV1();
+        const [overview, ds] = await Promise.all([
+          loadWorkspaceOverviewV1(datasetId),
+          listDatasetsV1(),
+        ]);
         if (overview.health.code !== "OK" || !overview.health.data) throw new Error(overview.health.message);
+        setDatasets(ds.data ?? []);
         setApi({
           health: overview.health.data,
           schema: overview.schema.data,
@@ -91,7 +102,7 @@ export default function App() {
     } catch (error) {
       setApi((current) => ({ ...current, loading: false, error: error instanceof Error ? error.message : "无法连接数据服务" }));
     }
-  }, [contract]);
+  }, [contract, datasetId]);
 
   function changeApiKey(next: string) {
     setApiKey(next);
@@ -101,6 +112,38 @@ export default function App() {
     } catch { /* 隐私模式下仅内存生效 */ }
     void refreshOverview();
   }
+  function changeDataset(next: string) {
+    if (next === datasetId) return;
+    setDatasetId(next);
+    setPaging(null);
+    setQueryError(null);
+    setErrorCode(null);
+  }
+
+  async function uploadFile(file: File) {
+    setQueryError(null);
+    setErrorCode(null);
+    try {
+      if (v1Source === "live" && !forceMock) {
+        const uploaded = await uploadDatasetLive(file);
+        const ds = await listDatasetsLive();
+        setDatasets(ds.data);
+        setDatasetId(uploaded.data.id);
+      } else {
+        const uploaded = await uploadDatasetV1(file);
+        const ds = await listDatasetsV1();
+        const list = ds.data ?? [];
+        setDatasets(uploaded.data ? [...list, uploaded.data] : list);
+        if (uploaded.data) setDatasetId(uploaded.data.id);
+      }
+    } catch (error) {
+      const code = error instanceof V1ApiError ? error.code : "SERVICE_UNAVAILABLE";
+      setQueryStatus("error");
+      setQueryError(error instanceof Error ? error.message : "上传失败");
+      setErrorCode(code);
+    }
+  }
+
   /** v0 现状 / v1 演示切换：只换数据源，界面同一套 */
   function switchContract(next: ContractMode) {
     if (next === contract) return;
@@ -159,7 +202,7 @@ export default function App() {
     try {
       if (!forceMock) {
         try {
-          const live = await runQueryV1Live(trimmed, nextPage, V1_PAGE_SIZE);
+          const live = await runQueryV1Live(trimmed, nextPage, V1_PAGE_SIZE, datasetId);
           const nextResult = toLegacyResponse(live.data);
           setResult(nextResult);
           setIsDemo(false);
@@ -184,7 +227,7 @@ export default function App() {
           }
         }
       }
-      const envelope = await runQueryV1(trimmed, nextPage, V1_PAGE_SIZE);
+      const envelope = await runQueryV1(trimmed, nextPage, V1_PAGE_SIZE, datasetId);
       setV1Source("mock");
       if (envelope.code !== "OK" || !envelope.data) {
         setQueryStatus("error");
@@ -211,7 +254,7 @@ export default function App() {
       window.clearInterval(phaseTimer);
       setPhase((current) => current === "execute" || current === "schema" || current === "generate" || current === "validate" ? "complete" : current);
     }
-  }, [queryStatus, result]);
+  }, [queryStatus, result, datasetId, forceMock]);
 
   const submitQuery = useCallback(async (nextQuestion = question, nextPage = 1) => {
     const trimmed = nextQuestion.trim();
@@ -282,7 +325,7 @@ export default function App() {
       </header>
 
       <div className="workspace">
-        <Sidebar api={api} history={history} onHistorySelect={(item) => void submitQuery(item.question)} onRefresh={() => void refreshOverview()} apiKey={apiKey} onApiKeyChange={changeApiKey} />
+        <Sidebar api={api} history={history} onHistorySelect={(item) => void submitQuery(item.question)} onRefresh={() => void refreshOverview()} apiKey={apiKey} onApiKeyChange={changeApiKey} showDatasets={contract === "v1"} datasets={datasets} datasetId={datasetId} onDatasetChange={changeDataset} onUploadFile={(file) => void uploadFile(file)} uploadEnabled={contract === "v1" && v1Source === "live" && !forceMock} />
         <main className="main-stage">
           <QueryComposer question={question} status={queryStatus} phase={phase} live={live} onQuestionChange={setQuestion} onSubmit={() => void submitQuery()} examples={contract === "v1" ? V1_EXAMPLE_QUESTIONS : undefined} />
           <ResultsPanel result={result} status={queryStatus} phase={phase} error={queryError} demo={isDemo} paging={contract === "v1" ? paging : null} onPageChange={contract === "v1" ? (page) => void submitQuery(question, page) : undefined} errorCode={contract === "v1" ? errorCode : null} />

@@ -1,7 +1,37 @@
 /** 前端契约测试：v1 信封解析、错误码分支、分页参数（样本形状对标后端 api/models.py）。 */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { V1ApiError, buildQueryBody, fetchEnvelope } from "./client";
+import { V1ApiError, buildQueryBody, fetchEnvelope, listDatasetsLive, uploadDatasetLive } from "./client";
+
+describe("datasets", () => {
+  it("解出数据集列表", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      version: "v1", code: "OK", message: "ok",
+      data: [{ id: "a1", name: "s.csv", table_name: "ds_s_a1", rows: 5, created_at: "t" }],
+      request_id: "req_z",
+    })));
+    const result = await listDatasetsLive();
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].table_name).toBe("ds_s_a1");
+  });
+
+  it("上传时用 multipart 并附带 Key", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "dqc_up", setItem: () => {}, removeItem: () => {} });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      version: "v1", code: "OK", message: "ok",
+      data: { id: "b2", name: "u.csv", table_name: "ds_u_b2", rows: 3, created_at: "t" },
+      request_id: "req_w",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["a,b\n1,2\n"], "u.csv", { type: "text/csv" });
+    const result = await uploadDatasetLive(file);
+    expect(result.data.id).toBe("b2");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/api/v1/datasets");
+    expect((init.headers as Record<string, string>)["X-API-Key"]).toBe("dqc_up");
+    expect(init.body).toBeInstanceOf(FormData);
+  });
+});
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -45,6 +75,11 @@ describe("fetchEnvelope", () => {
 describe("buildQueryBody", () => {
   it("钳制分页参数", () => {
     expect(buildQueryBody("q", 0, 999)).toEqual({ question: "q", clean_result: true, max_retries: 2, page: 1, page_size: 50 });
+  });
+
+  it("默认数据集时省略 dataset 字段", () => {
+    expect(buildQueryBody("q", 1, 10)).not.toHaveProperty("dataset");
+    expect(buildQueryBody("q", 1, 10, "abc123")).toMatchObject({ dataset: "abc123" });
   });
 });
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DatabaseIcon, RefreshIcon, SearchIcon, TableIcon } from "../icons";
+import type { DatasetInfo } from "../apiV1/types";
 import type { ApiState, QueryHistoryItem } from "../types";
 import { StatusDot } from "./StatusDot";
 
@@ -11,6 +12,16 @@ type Props = {
   onRefresh: () => void;
   apiKey: string;
   onApiKeyChange: (key: string) => void;
+  showDatasets: boolean;
+  datasets: DatasetInfo[];
+  datasetId: string;
+  onDatasetChange: (id: string) => void;
+  onUploadFile: (file: File) => void;
+  uploadEnabled: boolean;
+};
+
+const defaultDatasetOption: DatasetInfo = {
+  id: "orders", name: "电商订单样本（默认）", table_name: "orders", rows: 0, created_at: "",
 };
 
 const fallbackColumns = [
@@ -20,7 +31,7 @@ const fallbackColumns = [
   ["order_status", "TEXT"],
 ];
 
-export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onApiKeyChange }: Props) {
+export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onApiKeyChange, showDatasets, datasets, datasetId, onDatasetChange, onUploadFile, uploadEnabled }: Props) {
   const columns = api.schema?.columns ?? fallbackColumns.map(([name, type]) => ({ name, type }));
   const [columnQuery, setColumnQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -30,6 +41,7 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
   }, [columnQuery, columns]);
   const rows = api.quality?.total_rows ?? 5000;
   const totalColumns = api.quality?.total_columns ?? 10;
+  const datasetOptions = datasets.some((d) => d.id === "orders") ? datasets : [defaultDatasetOption, ...datasets];
 
   useEffect(() => {
     function focusSearch(event: KeyboardEvent) {
@@ -60,6 +72,33 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
           <div><strong>{totalColumns}</strong><span>个字段</span></div>
           <div><strong>1</strong><span>张表</span></div>
         </div>
+        {showDatasets && (
+          <div className="dataset-switcher">
+            <label className="dataset-select">
+              <span>数据集</span>
+              <select value={datasetId} onChange={(event) => onDatasetChange(event.target.value)} aria-label="切换数据集">
+                {datasetOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className={`upload-button ${uploadEnabled ? "" : "is-disabled"}`} title={uploadEnabled ? "上传 CSV/Excel（≤50MB）" : "连接真实后端后可上传"}>
+              上传数据
+              <input
+                type="file"
+                accept=".csv,.xls,.xlsx"
+                hidden
+                disabled={!uploadEnabled}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) onUploadFile(file);
+                }}
+              />
+            </label>
+            {!uploadEnabled && <small>演示替身模式不支持上传</small>}
+          </div>
+        )}
       </section>
 
       <section className="sidebar-section sidebar-section--schema">

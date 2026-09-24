@@ -7,11 +7,20 @@
  * 3. 真实落地后，这个文件的调用位置不变，只需把 mock 换成 fetch
  */
 import type { HealthStatus, QualityInfo, QueryResponse, SchemaInfo } from "../types";
+import type { DatasetInfo } from "../apiV1/types";
 import type { ApiEnvelope, ErrorCode, V1QueryData } from "./types";
 
 export const V1_PAGE_SIZE = 10;
 /** 服务端行数上限：超过即截断，置 truncated 标记 */
 const V1_MAX_ROWS = 100;
+
+export const MOCK_DATASETS: DatasetInfo[] = [
+  { id: "orders", name: "电商订单样本（默认）", table_name: "orders", rows: 5000, created_at: "2026-09-24T00:00:00" },
+  { id: "m-east", name: "华东区样本", table_name: "ds_east_01", rows: 1200, created_at: "2026-09-24T00:00:00" },
+  { id: "m-vip", name: "高价值订单", table_name: "ds_vip_02", rows: 320, created_at: "2026-09-24T00:00:00" },
+];
+const mockUploads: DatasetInfo[] = [];
+let mockUploadSeq = 0;
 
 const CATEGORIES = ["电子产品", "食品饮料", "服装鞋帽", "家居用品", "美妆护肤", "图书文具", "运动户外", "母婴用品"];
 const REGIONS = ["华东", "华北", "华南", "西南"];
@@ -79,23 +88,25 @@ function buildDataset(big: boolean): { columns: string[]; rows: MockRow[] } {
   return { columns, rows };
 }
 
-function buildSql(big: boolean): string {
+function buildSql(big: boolean, table: string): string {
   return big
-    ? "SELECT\n  category,\n  region,\n  strftime('%Y-%m', order_date) AS month,\n  COUNT(*) AS order_count,\n  ROUND(SUM(amount), 2) AS total_sales\nFROM orders\nGROUP BY category, region, month\nORDER BY total_sales DESC;"
-    : "SELECT\n  category,\n  region,\n  COUNT(*) AS order_count,\n  ROUND(SUM(amount), 2) AS total_sales\nFROM orders\nGROUP BY category, region\nORDER BY total_sales DESC;";
+    ? `SELECT\n  category,\n  region,\n  strftime('%Y-%m', order_date) AS month,\n  COUNT(*) AS order_count,\n  ROUND(SUM(amount), 2) AS total_sales\nFROM ${table}\nGROUP BY category, region, month\nORDER BY total_sales DESC;`
+    : `SELECT\n  category,\n  region,\n  COUNT(*) AS order_count,\n  ROUND(SUM(amount), 2) AS total_sales\nFROM ${table}\nGROUP BY category, region\nORDER BY total_sales DESC;`;
 }
 
 /** mock 版工作区概览：health 直接就绪，方便走查查询流程 */
-export async function loadWorkspaceOverviewV1(): Promise<{
+export async function loadWorkspaceOverviewV1(dataset?: string): Promise<{
   health: ApiEnvelope<HealthStatus>;
   schema: ApiEnvelope<SchemaInfo>;
   quality: ApiEnvelope<QualityInfo>;
 }> {
   await delay(400);
+  const table = dataset && dataset !== "orders" ? datasetTable(dataset) : "orders";
+  const totalRows = table === "orders" ? 5000 : table === "ds_east_01" ? 1200 : 320;
   return {
     health: ok({ status: "ok", database_ready: true, llm_configured: true }),
     schema: ok({
-      table_name: "orders",
+      table_name: table,
       columns: [
         { name: "order_id", type: "INTEGER" },
         { name: "order_date", type: "TEXT" },
@@ -106,8 +117,8 @@ export async function loadWorkspaceOverviewV1(): Promise<{
       ],
     }),
     quality: ok({
-      table_name: "orders",
-      total_rows: 5000,
+      table_name: table,
+      total_rows: totalRows,
       total_columns: 10,
       missing_values: { amount: 50 },
       duplicates: 3,
@@ -116,10 +127,34 @@ export async function loadWorkspaceOverviewV1(): Promise<{
   };
 }
 
+function datasetTable(dataset: string): string {
+  return [...MOCK_DATASETS, ...mockUploads].find((d) => d.id === dataset)?.table_name ?? "orders";
+}
+
+export async function listDatasetsV1(): Promise<ApiEnvelope<DatasetInfo[]>> {
+  await delay(200);
+  return ok([...MOCK_DATASETS, ...mockUploads]);
+}
+
+export async function uploadDatasetV1(file: File): Promise<ApiEnvelope<DatasetInfo>> {
+  await delay(600);
+  mockUploadSeq += 1;
+  const entry: DatasetInfo = {
+    id: `m-up${mockUploadSeq}`,
+    name: file.name,
+    table_name: `ds_up_${mockUploadSeq}`,
+    rows: 32,
+    created_at: new Date().toISOString(),
+  };
+  mockUploads.push(entry);
+  return ok(entry, "上传成功（mock）：数据与默认样本一致，仅演示流程");
+}
+
 export async function runQueryV1(
   question: string,
   page: number,
   pageSize: number,
+  dataset?: string,
   signal?: AbortSignal,
 ): Promise<ApiEnvelope<V1QueryData | null>> {
   await delay(800, signal);
@@ -137,7 +172,13 @@ export async function runQueryV1(
   }
 
   const big = /(超大|全部|导出)/.test(trimmed);
-  const { columns, rows } = buildDataset(big);
+  const { columns, rows: allRows } = buildDataset(big);
+  const table = dataset && dataset !== "orders" ? datasetTable(dataset) : "orders";
+  const rows = dataset === "m-east"
+    ? allRows.filter((r) => r.region === "华东")
+    : dataset === "m-vip"
+      ? allRows.filter((r) => (r.total_sales as number) > 80000)
+      : allRows;
   const truncated = rows.length > V1_MAX_ROWS;
   const visible = truncated ? rows.slice(0, V1_MAX_ROWS) : rows;
   const totalPages = Math.max(1, Math.ceil(visible.length / pageSize));
@@ -151,7 +192,7 @@ export async function runQueryV1(
   return ok(
     {
       question: trimmed,
-      sql: buildSql(big),
+      sql: buildSql(big, table),
       columns,
       rows: pageRows,
       row_count: visible.length,
