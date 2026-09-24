@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .auth import require_api_key
+from .auth import charge_quota, require_api_key
 from .datasets import list_datasets, register_upload, resolve_table
 from .errors import APIError
 from .logjson import JsonFormatter
@@ -156,6 +156,7 @@ def create_app() -> FastAPI:
         record_query()
         try:
             table = resolve_table(service.db_path, request.dataset)
+            charge_quota(service.db_path, _key)
             data = service.query_page(question, request.clean_result, request.max_retries, request.page, request.page_size, table_name=table)
         except APIError as error:
             logger.warning("v1 query failed", extra={"request_id": request_id, "code": error.code.value, "detail": error.message})

@@ -40,11 +40,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: No tracked .env files
         run: |
-          tracked=$(git ls-files | grep -x -e '.env' -e '*/.env' || true)
+          tracked=$(git ls-files | grep -E '(^|/)\.env(\.|$)' || true)
           if [ -n "$tracked" ]; then echo "tracked env files: $tracked"; exit 1; fi
           echo "no tracked .env"
       - name: No plaintext secrets in source
         run: |
-          hits=$(grep -rn -E 'sk-[A-Za-z0-9]{20,}|dqc_[A-Za-z0-9_-]{16,}' --include='*.py' --include='*.ts' --include='*.tsx' api src scripts load frontend/src || true)
+          hits=$(grep -rn -E 'sk-[A-Za-z0-9]{20,}|dqc_[A-Za-z0-9_-]{16,}' --include='*.py' --include='*.ts' --include='*.tsx' --include='*.json' --include='*.yml' --include='*.yaml' --include='*.md' --include='*.ps1' --include='*.sh' api src scripts load frontend docs render.yaml || true)
           if [ -n "$hits" ]; then echo "$hits"; exit 1; fi
           echo "no plaintext secrets"

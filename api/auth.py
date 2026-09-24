@@ -117,8 +117,8 @@ def verify_key(db_path: str, plaintext: str) -> str:
     return digest
 
 
-def check_rate_and_quota(db_path: str, key_hash: str) -> None:
-    """限流 + 日配额：超限抛 RATE_LIMITED。"""
+def check_rate(key_hash: str) -> None:
+    """滑动窗口限流（内存实现，单 worker 前提）。"""
     now = time.monotonic()
     window = _hits.setdefault(key_hash, deque())
     while window and window[0] <= now - _WINDOW_SECONDS:
@@ -127,6 +127,9 @@ def check_rate_and_quota(db_path: str, key_hash: str) -> None:
         raise APIError(ErrorCode.RATE_LIMITED, 429, "请求过于频繁，请稍后重试")
     window.append(now)
 
+
+def charge_quota(db_path: str, key_hash: str) -> None:
+    """日配额检查与计数：只在 query 入口调用。"""
     init_auth_tables(db_path)
     conn = sqlite3.connect(db_path)
     try:
@@ -151,13 +154,19 @@ def check_rate_and_quota(db_path: str, key_hash: str) -> None:
         conn.close()
 
 
+def check_rate_and_quota(db_path: str, key_hash: str) -> None:
+    """限流 + 配额（组合便利函数；依赖只用 check_rate，配额由 query 入口 charge）。"""
+    check_rate(key_hash)
+    charge_quota(db_path, key_hash)
+
+
 async def require_api_key(request: Request) -> str:
-    """FastAPI dependency：读 X-API-Key，依次过校验/限流/配额，返回 key_hash。"""
+    """FastAPI dependency：读 X-API-Key，依次过校验/限流，返回 key_hash（配额由 query 入口单独计）。"""
     init_auth_tables(os.getenv("DB_PATH", "data/query.db"))
     plaintext = request.headers.get("X-API-Key", "")
     if not plaintext:
         raise APIError(ErrorCode.AUTH_REQUIRED, 401, "缺少 X-API-Key 请求头")
     db_path = os.getenv("DB_PATH", "data/query.db")
     key_hash = verify_key(db_path, plaintext)
-    check_rate_and_quota(db_path, key_hash)
+    check_rate(key_hash)
     return key_hash

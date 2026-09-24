@@ -141,6 +141,44 @@ def test_valid_key_passes(authed_client):
     assert response.json()["code"] == "OK"
 
 
+def test_quota_burned_only_by_query(tmp_path, monkeypatch):
+    """终审 Important 1：health 等读接口不得烧配额，只有 query 计数。"""
+    from fastapi.testclient import TestClient
+
+    from api.auth import create_key
+    from api.main import create_app, get_query_service
+
+    db = str(tmp_path / "t.db")
+    monkeypatch.setenv("DB_PATH", db)
+    key = create_key(db, "ci", daily_quota=1)
+
+    class FakeService:
+        @property
+        def db_path(self):
+            return db
+
+        def health(self):
+            return {"status": "ok", "database_ready": True, "llm_configured": False}
+
+        def query_page(self, *args, **kwargs):
+            return {"question": "q", "sql": "SELECT 1", "columns": ["a"], "rows": [{"a": 1}],
+                    "row_count": 1, "page": 1, "page_size": 10, "total_pages": 1,
+                    "truncated": False, "chart_hint": "table", "execution_time": 0.01,
+                    "valid": True, "retries": 0, "from_cache": False}
+
+    app = create_app()
+    app.dependency_overrides[get_query_service] = FakeService
+    headers = {"X-API-Key": key}
+    with TestClient(app) as client:
+        assert client.get("/api/v1/health", headers=headers).status_code == 200
+        assert client.get("/api/v1/health", headers=headers).status_code == 200
+        ok = client.post("/api/v1/query", headers=headers, json={"question": "有效问题"})
+        assert ok.status_code == 200
+        over = client.post("/api/v1/query", headers=headers, json={"question": "有效问题"})
+        assert over.status_code == 429
+        assert over.json()["code"] == "RATE_LIMITED"
+
+
 def test_manage_keys_cli(tmp_path):
     import subprocess
     import sys
