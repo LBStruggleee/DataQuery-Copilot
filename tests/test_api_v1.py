@@ -182,6 +182,27 @@ def test_v1_health_envelope(v1_client):
     assert body["data"]["status"] == "ok"
 
 
+def test_v1_query_wraps_unexpected_errors_in_envelope():
+    from fastapi.testclient import TestClient
+
+    from api.main import create_app, get_query_service
+
+    class ExplodingService(FakeV1Service):
+        def query_page(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    app = create_app()
+    app.dependency_overrides[get_query_service] = ExplodingService
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/api/v1/query", json={"question": "有效问题"})
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["code"] == "QUERY_FAILED"
+    assert body["data"] is None
+    assert body["request_id"].startswith("req_")
+
+
 def test_openapi_contract():
     from fastapi.testclient import TestClient
 

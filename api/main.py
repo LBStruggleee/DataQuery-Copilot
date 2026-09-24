@@ -105,6 +105,8 @@ def create_app() -> FastAPI:
             return _envelope("OK", "ok", service.schema(), request_id)
         except ValueError as error:
             return JSONResponse(status_code=404, content=_envelope("TABLE_NOT_FOUND", str(error), None, request_id))
+        except Exception:
+            return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "表结构查询失败", None, request_id))
 
     @application.get("/api/v1/quality", response_model=ApiEnvelope[QualityResponse])
     def quality_v1(service: DataQueryService = Depends(get_query_service)):
@@ -124,6 +126,8 @@ def create_app() -> FastAPI:
             data = service.query_page(question, request.clean_result, request.max_retries, request.page, request.page_size)
         except APIError as error:
             return JSONResponse(status_code=error.status, content=_envelope(error.code.value, error.message, None, request_id))
+        except Exception:
+            return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "查询服务执行失败", None, request_id))
         message = "结果超过 100 行上限，仅返回前 100 行" if data["truncated"] else "ok"
         return _envelope("OK", message, data, request_id)
 
