@@ -180,3 +180,22 @@ def test_v1_health_envelope(v1_client):
     body = v1_client.get("/api/v1/health").json()
     assert (body["version"], body["code"]) == ("v1", "OK")
     assert body["data"]["status"] == "ok"
+
+
+def test_openapi_contract():
+    from fastapi.testclient import TestClient
+
+    from api.main import create_app
+
+    with TestClient(create_app()) as client:
+        spec = client.get("/openapi.json").json()
+
+    for path in ["/api/v1/health", "/api/v1/schema", "/api/v1/quality", "/api/v1/query"]:
+        assert path in spec["paths"], f"missing {path}"
+
+    envelope = spec["components"]["schemas"]["ApiEnvelope_QueryDataV1_"]
+    assert set(["request_id"]) <= set(envelope["required"])
+    assert set(["version", "code", "message", "data", "request_id"]) <= set(envelope["properties"])
+
+    query_props = spec["components"]["schemas"]["QueryRequestV1"]["properties"]
+    assert set(["question", "page", "page_size"]) <= set(query_props)
