@@ -1,8 +1,95 @@
 """Phase 1: API Key 鉴权、限流、配额。"""
 
+import logging
+
+import pytest
+
 
 def test_auth_error_codes_are_stable():
     from api.errors import ErrorCode
 
     assert ErrorCode.AUTH_REQUIRED.value == "AUTH_REQUIRED"
     assert ErrorCode.RATE_LIMITED.value == "RATE_LIMITED"
+
+
+def _fresh_db(tmp_path):
+    from api.auth import init_auth_tables
+
+    db = str(tmp_path / "auth.db")
+    init_auth_tables(db)
+    return db
+
+
+def test_create_and_verify_key(tmp_path):
+    from api.auth import create_key, verify_key
+
+    db = _fresh_db(tmp_path)
+    plain = create_key(db, "ci")
+    assert plain.startswith("dqc_")
+    key_hash = verify_key(db, plain)
+    assert isinstance(key_hash, str) and len(key_hash) == 64
+
+
+def test_unknown_and_revoked_keys_rejected(tmp_path):
+    from api.auth import create_key, revoke_key, verify_key
+    from api.errors import APIError
+
+    db = _fresh_db(tmp_path)
+    with pytest.raises(APIError) as exc_info:
+        verify_key(db, "dqc_nonexistent")
+    assert exc_info.value.code.value == "AUTH_REQUIRED"
+    assert exc_info.value.status == 401
+
+    plain = create_key(db, "ci")
+    revoke_key(db, plain)
+    with pytest.raises(APIError) as exc_info:
+        verify_key(db, plain)
+    assert exc_info.value.code.value == "AUTH_REQUIRED"
+
+
+def test_rate_limit_trips(monkeypatch, tmp_path):
+    import api.auth as auth_module
+    from api.auth import check_rate_and_quota, create_key, verify_key
+    from api.errors import APIError
+
+    monkeypatch.setattr(auth_module, "RATE_LIMIT_PER_MINUTE", 3)
+    db = _fresh_db(tmp_path)
+    key_hash = verify_key(db, create_key(db, "ci"))
+    check_rate_and_quota(db, key_hash)
+    check_rate_and_quota(db, key_hash)
+    check_rate_and_quota(db, key_hash)
+    with pytest.raises(APIError) as exc_info:
+        check_rate_and_quota(db, key_hash)
+    assert exc_info.value.code.value == "RATE_LIMITED"
+    assert exc_info.value.status == 429
+
+
+def test_quota_exhausted_and_resets_next_day(monkeypatch, tmp_path):
+    import api.auth as auth_module
+    from api.auth import check_rate_and_quota, create_key, verify_key
+    from api.errors import APIError
+
+    db = _fresh_db(tmp_path)
+    key_hash = verify_key(db, create_key(db, "ci", daily_quota=1))
+    check_rate_and_quota(db, key_hash)
+    with pytest.raises(APIError) as exc_info:
+        check_rate_and_quota(db, key_hash)
+    assert exc_info.value.code.value == "RATE_LIMITED"
+
+    monkeypatch.setattr(auth_module, "_today", lambda: "2099-01-02")
+    check_rate_and_quota(db, key_hash)  # 新的一天，配额重置，不抛异常
+
+
+def test_key_material_never_logged(tmp_path, caplog):
+    from api.auth import create_key, verify_key
+    from api.errors import APIError
+
+    db = _fresh_db(tmp_path)
+    plain = create_key(db, "ci")
+    with caplog.at_level(logging.WARNING, logger="api.auth"):
+        try:
+            verify_key(db, "dqc_wrongkey")
+        except APIError:
+            pass
+        verify_key(db, plain)
+    assert plain not in caplog.text
