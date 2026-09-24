@@ -2,6 +2,7 @@
 backups/
 .e2e/
 .soak/
+test-results/
 __pycache__/
 *.pyc
 data/*.db
