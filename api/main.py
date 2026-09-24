@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .auth import require_api_key
 from .errors import APIError
 from .models import (
     ApiEnvelope,
@@ -64,6 +65,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @application.exception_handler(APIError)
+    async def api_error_handler(request, exc):
+        """领域异常统一包信封（含鉴权依赖抛出的，路由 try/except 覆盖不到）。"""
+        return JSONResponse(
+            status_code=exc.status,
+            content=_envelope(exc.code.value, exc.message, None, new_request_id()),
+        )
+
     @application.exception_handler(RequestValidationError)
     async def validation_handler(request, exc):
         """v1 路径的 Pydantic 校验失败包信封；非 v1 路径保持默认行为（v0 字节级兼容）。"""
@@ -78,18 +87,21 @@ def create_app() -> FastAPI:
         )
 
     @application.get("/api/health", response_model=HealthResponse, deprecated=True)
-    def health(service: DataQueryService = Depends(get_query_service)):
+    def health(service: DataQueryService = Depends(get_query_service),
+               _key: str = Depends(require_api_key)):
         return service.health()
 
     @application.get("/api/schema", response_model=SchemaResponse, deprecated=True)
-    def schema(service: DataQueryService = Depends(get_query_service)):
+    def schema(service: DataQueryService = Depends(get_query_service),
+               _key: str = Depends(require_api_key)):
         try:
             return service.schema()
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
     @application.get("/api/quality", response_model=QualityResponse, deprecated=True)
-    def quality(service: DataQueryService = Depends(get_query_service)):
+    def quality(service: DataQueryService = Depends(get_query_service),
+                _key: str = Depends(require_api_key)):
         try:
             return service.quality()
         except Exception as error:
@@ -99,6 +111,7 @@ def create_app() -> FastAPI:
     def query(
         request: QueryRequest,
         service: DataQueryService = Depends(get_query_service),
+        _key: str = Depends(require_api_key),
     ):
         try:
             return service.query(
@@ -110,7 +123,8 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail="查询服务执行失败") from error
 
     @application.get("/api/v1/health", response_model=ApiEnvelope[HealthResponse])
-    def health_v1(service: DataQueryService = Depends(get_query_service)):
+    def health_v1(service: DataQueryService = Depends(get_query_service),
+                  _key: str = Depends(require_api_key)):
         request_id = new_request_id()
         try:
             return _envelope("OK", "ok", service.health(), request_id)
@@ -118,7 +132,8 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "健康检查失败", None, request_id))
 
     @application.get("/api/v1/schema", response_model=ApiEnvelope[SchemaResponse])
-    def schema_v1(service: DataQueryService = Depends(get_query_service)):
+    def schema_v1(service: DataQueryService = Depends(get_query_service),
+                  _key: str = Depends(require_api_key)):
         request_id = new_request_id()
         try:
             return _envelope("OK", "ok", service.schema(), request_id)
@@ -128,7 +143,8 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "表结构查询失败", None, request_id))
 
     @application.get("/api/v1/quality", response_model=ApiEnvelope[QualityResponse])
-    def quality_v1(service: DataQueryService = Depends(get_query_service)):
+    def quality_v1(service: DataQueryService = Depends(get_query_service),
+                   _key: str = Depends(require_api_key)):
         request_id = new_request_id()
         try:
             return _envelope("OK", "ok", service.quality(), request_id)
@@ -136,7 +152,8 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=500, content=_envelope("QUERY_FAILED", "数据质量检查失败", None, request_id))
 
     @application.post("/api/v1/query", response_model=ApiEnvelope[QueryDataV1])
-    def query_v1(request: QueryRequestV1, service: DataQueryService = Depends(get_query_service)):
+    def query_v1(request: QueryRequestV1, service: DataQueryService = Depends(get_query_service),
+                 _key: str = Depends(require_api_key)):
         request_id = new_request_id()
         question = request.question.strip()
         if not question:

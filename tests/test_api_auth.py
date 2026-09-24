@@ -93,3 +93,51 @@ def test_key_material_never_logged(tmp_path, caplog):
             pass
         verify_key(db, plain)
     assert plain not in caplog.text
+
+
+@pytest.fixture
+def authed_client(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from api.auth import create_key
+    from api.main import create_app, get_query_service
+
+    db = str(tmp_path / "t.db")
+    monkeypatch.setenv("DB_PATH", db)
+    key = create_key(db, "ci")
+
+    class FakeService:
+        def query_page(self, question, clean_result, max_retries, page, page_size):
+            return {"question": question, "sql": "SELECT 1", "columns": ["a"], "rows": [{"a": 1}],
+                    "row_count": 1, "page": 1, "page_size": 10, "total_pages": 1,
+                    "truncated": False, "chart_hint": "table", "execution_time": 0.01,
+                    "valid": True, "retries": 0, "from_cache": False}
+
+    app = create_app()
+    app.dependency_overrides[get_query_service] = FakeService
+    with TestClient(app) as client:
+        client.key = key
+        yield client
+
+
+def test_v1_query_requires_key(authed_client):
+    response = authed_client.post("/api/v1/query", json={"question": "有效问题"})
+    assert response.status_code == 401
+    body = response.json()
+    assert body["code"] == "AUTH_REQUIRED"
+    assert body["data"] is None
+    assert body["request_id"].startswith("req_")
+
+
+def test_v0_health_requires_key(authed_client):
+    response = authed_client.get("/api/health")
+    assert response.status_code == 401
+    assert response.json()["code"] == "AUTH_REQUIRED"
+
+
+def test_valid_key_passes(authed_client):
+    response = authed_client.post(
+        "/api/v1/query", json={"question": "有效问题"}, headers={"X-API-Key": authed_client.key}
+    )
+    assert response.status_code == 200
+    assert response.json()["code"] == "OK"

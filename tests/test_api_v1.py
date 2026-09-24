@@ -142,15 +142,19 @@ def test_query_page_truncates_before_convert(monkeypatch, tmp_path):
     assert seen == [100]
 
 
-def test_v1_validation_errors_use_envelope():
+def test_v1_validation_errors_use_envelope(tmp_path, monkeypatch):
     """终审 I1：Pydantic 校验失败也必须包信封。"""
     from fastapi.testclient import TestClient
 
+    from api.auth import create_key
     from api.main import create_app, get_query_service
 
+    db = str(tmp_path / "t.db")
+    monkeypatch.setenv("DB_PATH", db)
+    key = create_key(db, "pytest")
     app = create_app()
     app.dependency_overrides[get_query_service] = FakeV1Service
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-API-Key": key}) as client:
         empty = client.post("/api/v1/query", json={"question": ""})
         bad_page = client.post("/api/v1/query", json={"question": "有效问题", "page": 0})
 
@@ -160,19 +164,23 @@ def test_v1_validation_errors_use_envelope():
     assert bad_page.json()["version"] == "v1"
 
 
-def test_v1_health_wraps_unexpected_errors():
+def test_v1_health_wraps_unexpected_errors(tmp_path, monkeypatch):
     """终审 I2：health_v1 异常也必须包信封。"""
     from fastapi.testclient import TestClient
 
+    from api.auth import create_key
     from api.main import create_app, get_query_service
 
     class ExplodingHealthService(FakeV1Service):
         def health(self):
             raise RuntimeError("boom")
 
+    db = str(tmp_path / "t.db")
+    monkeypatch.setenv("DB_PATH", db)
+    key = create_key(db, "pytest")
     app = create_app()
     app.dependency_overrides[get_query_service] = ExplodingHealthService
-    with TestClient(app, raise_server_exceptions=False) as client:
+    with TestClient(app, raise_server_exceptions=False, headers={"X-API-Key": key}) as client:
         response = client.get("/api/v1/health")
 
     assert response.status_code == 500
@@ -202,14 +210,18 @@ class FakeV1Service:
 
 
 @pytest.fixture
-def v1_client():
+def v1_client(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
+    from api.auth import create_key
     from api.main import create_app, get_query_service
 
+    db = str(tmp_path / "t.db")
+    monkeypatch.setenv("DB_PATH", db)
+    key = create_key(db, "pytest")
     app = create_app()
     app.dependency_overrides[get_query_service] = FakeV1Service
-    with TestClient(app) as test_client:
+    with TestClient(app, headers={"X-API-Key": key}) as test_client:
         yield test_client
 
 
@@ -243,18 +255,22 @@ def test_v1_health_envelope(v1_client):
     assert body["data"]["status"] == "ok"
 
 
-def test_v1_query_wraps_unexpected_errors_in_envelope():
+def test_v1_query_wraps_unexpected_errors_in_envelope(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
+    from api.auth import create_key
     from api.main import create_app, get_query_service
 
     class ExplodingService(FakeV1Service):
         def query_page(self, *args, **kwargs):
             raise RuntimeError("boom")
 
+    db = str(tmp_path / "t.db")
+    monkeypatch.setenv("DB_PATH", db)
+    key = create_key(db, "pytest")
     app = create_app()
     app.dependency_overrides[get_query_service] = ExplodingService
-    with TestClient(app, raise_server_exceptions=False) as client:
+    with TestClient(app, raise_server_exceptions=False, headers={"X-API-Key": key}) as client:
         response = client.post("/api/v1/query", json={"question": "有效问题"})
 
     assert response.status_code == 500

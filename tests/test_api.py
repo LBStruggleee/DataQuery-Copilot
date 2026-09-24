@@ -56,10 +56,15 @@ class FakeQueryService:
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch):
+    from api.auth import create_key
+
+    db = str(tmp_path / "t.db")
+    monkeypatch.setenv("DB_PATH", db)
+    key = create_key(db, "pytest")
     app = create_app()
     app.dependency_overrides[get_query_service] = FakeQueryService
-    with TestClient(app) as test_client:
+    with TestClient(app, headers={"X-API-Key": key}) as test_client:
         yield test_client
 
 
@@ -110,14 +115,19 @@ def test_query_validates_request(client, payload):
     assert response.status_code == 422
 
 
-def test_schema_maps_missing_table_to_404():
+def test_schema_maps_missing_table_to_404(tmp_path, monkeypatch):
+    from api.auth import create_key
+
     class MissingTableService(FakeQueryService):
         def schema(self):
             raise ValueError("数据表不存在: orders")
 
+    db = str(tmp_path / "t.db")
+    monkeypatch.setenv("DB_PATH", db)
+    key = create_key(db, "pytest")
     app = create_app()
     app.dependency_overrides[get_query_service] = MissingTableService
-    with TestClient(app) as test_client:
+    with TestClient(app, headers={"X-API-Key": key}) as test_client:
         response = test_client.get("/api/schema")
 
     assert response.status_code == 404
