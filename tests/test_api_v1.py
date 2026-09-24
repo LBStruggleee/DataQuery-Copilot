@@ -116,3 +116,67 @@ def test_query_page_maps_engine_errors(monkeypatch, tmp_path, engine_error, code
     with pytest.raises(APIError) as exc_info:
         service.query_page("q", True, 2, 1, 10)
     assert exc_info.value.code.value == code
+
+
+class FakeV1Service:
+    def health(self):
+        return {"status": "ok", "database_ready": True, "llm_configured": False}
+
+    def schema(self):
+        return {"table_name": "orders", "columns": [{"name": "category", "type": "TEXT"}]}
+
+    def quality(self):
+        return {"table_name": "orders", "total_rows": 10, "total_columns": 1,
+                "missing_values": {}, "duplicates": 0, "column_types": {"category": "str"}}
+
+    def query_page(self, question, clean_result, max_retries, page, page_size):
+        from api.errors import APIError, ErrorCode
+
+        if question == "触发拒绝":
+            raise APIError(ErrorCode.SQL_REJECTED, 422, "SQL 安全校验未通过")
+        return {"question": question, "sql": "SELECT 1", "columns": ["a"], "rows": [{"a": 1}],
+                "row_count": 1, "page": page, "page_size": page_size, "total_pages": 1,
+                "truncated": False, "chart_hint": "table", "execution_time": 0.01,
+                "valid": True, "retries": 0, "from_cache": False}
+
+
+@pytest.fixture
+def v1_client():
+    from fastapi.testclient import TestClient
+
+    from api.main import create_app, get_query_service
+
+    app = create_app()
+    app.dependency_overrides[get_query_service] = FakeV1Service
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def test_v1_query_envelope(v1_client):
+    response = v1_client.post("/api/v1/query", json={"question": "有效问题", "page": 1, "page_size": 10})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version"] == "v1" and body["code"] == "OK"
+    assert body["data"]["rows"] == [{"a": 1}]
+    assert body["request_id"].startswith("req_")
+
+
+def test_v1_query_rejects_blank_question(v1_client):
+    response = v1_client.post("/api/v1/query", json={"question": "   "})
+    assert response.status_code == 422
+    assert response.json()["code"] == "INVALID_QUESTION"
+
+
+def test_v1_query_maps_service_error(v1_client):
+    response = v1_client.post("/api/v1/query", json={"question": "触发拒绝"})
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "SQL_REJECTED"
+    assert body["data"] is None
+    assert body["request_id"].startswith("req_")
+
+
+def test_v1_health_envelope(v1_client):
+    body = v1_client.get("/api/v1/health").json()
+    assert (body["version"], body["code"]) == ("v1", "OK")
+    assert body["data"]["status"] == "ok"
