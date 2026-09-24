@@ -1,9 +1,10 @@
 import type { ApiState, HealthStatus, QualityInfo, QueryResponse, SchemaInfo } from "./types";
+import { readApiKey } from "./apiV1/client";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`);
+  const response = await fetch(`${API_BASE_URL}${path}`, { headers: { ...readApiKey() } });
   if (!response.ok) {
     throw new Error(`${path} 请求失败 (${response.status})`);
   }
@@ -22,7 +23,7 @@ export async function loadWorkspaceOverview(): Promise<Omit<ApiState, "loading" 
 export async function runQuery(question: string, signal?: AbortSignal): Promise<QueryResponse> {
   const response = await fetch(`${API_BASE_URL}/api/query`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...readApiKey() },
     body: JSON.stringify({ question, clean_result: true, max_retries: 2 }),
     signal,
   });

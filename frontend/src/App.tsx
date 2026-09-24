@@ -8,7 +8,7 @@ import { ResultsPanel } from "./components/ResultsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { V1_EXAMPLE_QUESTIONS, V1_PAGE_SIZE, loadWorkspaceOverviewV1, runQueryV1, toLegacyResponse } from "./contractV1/mockClient";
 import type { V1Paging } from "./contractV1/types";
-import { V1ApiError, loadWorkspaceOverviewV1Live, runQueryV1Live } from "./apiV1/client";
+import { API_KEY_STORAGE_KEY, V1ApiError, loadWorkspaceOverviewV1Live, runQueryV1Live } from "./apiV1/client";
 import { GithubIcon, ThemeIcon } from "./icons";
 import { demoQueryResponse } from "./mockData";
 import type { ApiState, QueryHistoryItem, QueryPhase, QueryResponse, QueryStatus } from "./types";
@@ -49,6 +49,9 @@ export default function App() {
   const [paging, setPaging] = useState<V1Paging | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [v1Source, setV1Source] = useState<"live" | "mock">("live");
+  const [apiKey, setApiKey] = useState(() => {
+    try { return localStorage.getItem(API_KEY_STORAGE_KEY) ?? ""; } catch { return ""; }
+  });
   const forceMock = useMemo(() => {
     try { return new URLSearchParams(window.location.search).get("mock") === "1"; } catch { return false; }
   }, []);
@@ -90,6 +93,14 @@ export default function App() {
     }
   }, [contract]);
 
+  function changeApiKey(next: string) {
+    setApiKey(next);
+    try {
+      if (next) localStorage.setItem(API_KEY_STORAGE_KEY, next);
+      else localStorage.removeItem(API_KEY_STORAGE_KEY);
+    } catch { /* 隐私模式下仅内存生效 */ }
+    void refreshOverview();
+  }
   /** v0 现状 / v1 演示切换：只换数据源，界面同一套 */
   function switchContract(next: ContractMode) {
     if (next === contract) return;
@@ -271,7 +282,7 @@ export default function App() {
       </header>
 
       <div className="workspace">
-        <Sidebar api={api} history={history} onHistorySelect={(item) => void submitQuery(item.question)} onRefresh={() => void refreshOverview()} />
+        <Sidebar api={api} history={history} onHistorySelect={(item) => void submitQuery(item.question)} onRefresh={() => void refreshOverview()} apiKey={apiKey} onApiKeyChange={changeApiKey} />
         <main className="main-stage">
           <QueryComposer question={question} status={queryStatus} phase={phase} live={live} onQuestionChange={setQuestion} onSubmit={() => void submitQuery()} examples={contract === "v1" ? V1_EXAMPLE_QUESTIONS : undefined} />
           <ResultsPanel result={result} status={queryStatus} phase={phase} error={queryError} demo={isDemo} paging={contract === "v1" ? paging : null} onPageChange={contract === "v1" ? (page) => void submitQuery(question, page) : undefined} errorCode={contract === "v1" ? errorCode : null} />

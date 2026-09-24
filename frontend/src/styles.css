@@ -394,3 +394,11 @@ td:first-child { color: var(--text); }
 .pager button:disabled { opacity: .35; }
 .result-state--notice { align-items: start; padding: 18px 30px; border-left: 2px solid var(--accent); text-align: left; background: var(--accent-soft); }
 .result-state--notice > span { color: var(--accent); }
+
+/* API Key 配置 */
+.sidebar-section--key { border-bottom: 0; }
+.key-field { height: 36px; border: 1px solid var(--border); border-radius: 6px; background: rgba(255,255,255,.02); margin-top: 10px; padding: 0 4px 0 9px; display: flex; align-items: center; gap: 7px; }
+.key-field input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font: 11px var(--mono); outline: none; }
+.key-field input::placeholder { color: var(--muted); }
+.key-field button { border: 0; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; padding: 6px; }
+.key-field button:hover { color: var(--text); }

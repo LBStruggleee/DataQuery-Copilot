@@ -47,3 +47,15 @@ describe("buildQueryBody", () => {
     expect(buildQueryBody("q", 0, 999)).toEqual({ question: "q", clean_result: true, max_retries: 2, page: 1, page_size: 50 });
   });
 });
+
+describe("api key", () => {
+  it("localStorage 有 Key 时附带 X-API-Key 请求头", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "dqc_test", setItem: () => {}, removeItem: () => {} });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      version: "v1", code: "OK", message: "ok", data: { a: 1 }, request_id: "req_x",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchEnvelope("/health");
+    expect(fetchMock.mock.calls[0][1].headers["X-API-Key"]).toBe("dqc_test");
+  });
+});

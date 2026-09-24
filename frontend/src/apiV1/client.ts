@@ -4,6 +4,18 @@ import type { ApiEnvelope, ErrorCode, V1QueryData } from "./types";
 
 const V1_BASE = `${(import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "")}/api/v1`;
 
+export const API_KEY_STORAGE_KEY = "dqc_api_key";
+
+/** 从 localStorage 读 Key（读不到返回空对象，不抛异常）。 */
+export function readApiKey(): Record<string, string> {
+  try {
+    const key = localStorage.getItem(API_KEY_STORAGE_KEY);
+    return key ? { "X-API-Key": key } : {};
+  } catch {
+    return {};
+  }
+}
+
 export class V1ApiError extends Error {
   code: ErrorCode | "UNKNOWN";
   status: number;
@@ -19,7 +31,11 @@ export class V1ApiError extends Error {
 }
 
 export async function fetchEnvelope<T>(path: string, init?: RequestInit): Promise<{ data: T; requestId: string }> {
-  const response = await fetch(`${V1_BASE}${path}`, init);
+  const merged: RequestInit = {
+    ...init,
+    headers: { ...readApiKey(), ...((init?.headers ?? {}) as Record<string, string>) },
+  };
+  const response = await fetch(`${V1_BASE}${path}`, merged);
   const payload = (await response.json().catch(() => null)) as ApiEnvelope<T> | null;
   if (!payload || payload.version !== "v1" || typeof payload.code !== "string") {
     throw new V1ApiError("UNKNOWN", "v1 服务返回了无法识别的响应", response.status, null);

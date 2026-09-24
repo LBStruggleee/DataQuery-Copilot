@@ -9,6 +9,8 @@ type Props = {
   history: QueryHistoryItem[];
   onHistorySelect: (item: QueryHistoryItem) => void;
   onRefresh: () => void;
+  apiKey: string;
+  onApiKeyChange: (key: string) => void;
 };
 
 const fallbackColumns = [
@@ -18,7 +20,7 @@ const fallbackColumns = [
   ["order_status", "TEXT"],
 ];
 
-export function Sidebar({ api, history, onHistorySelect, onRefresh }: Props) {
+export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onApiKeyChange }: Props) {
   const columns = api.schema?.columns ?? fallbackColumns.map(([name, type]) => ({ name, type }));
   const [columnQuery, setColumnQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -109,6 +111,22 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh }: Props) {
         )}
         <span>SQLite · WAL</span>
       </footer>
+      <section className="sidebar-section sidebar-section--key">
+        <div className="section-label">访问密钥</div>
+        <label className="key-field">
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(event) => onApiKeyChange(event.target.value)}
+            placeholder="dqc_…（管理员签发）"
+            aria-label="API 访问密钥"
+            autoComplete="off"
+          />
+          {apiKey && (
+            <button type="button" onClick={() => onApiKeyChange("")} aria-label="清除密钥">清除</button>
+          )}
+        </label>
+      </section>
     </aside>
   );
 }
