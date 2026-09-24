@@ -11,6 +11,11 @@ type Props = {
   phase: QueryPhase;
   error: string | null;
   demo: boolean;
+  /** v1 演示用：分页信息（缺省 = v0 行为，全量展示） */
+  paging?: { page: number; totalPages: number; truncated: boolean } | null;
+  onPageChange?: (page: number) => void;
+  /** v1 演示用：统一错误码（缺省 = v0 行为，只显示文本） */
+  errorCode?: string | null;
 };
 
 const phaseLabels: Partial<Record<QueryPhase, string>> = {
@@ -27,7 +32,7 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
-export function ResultsPanel({ result, status, phase, error, demo }: Props) {
+export function ResultsPanel({ result, status, phase, error, demo, paging, onPageChange, errorCode }: Props) {
   const [tab, setTab] = useState<Tab>("table");
   const loading = status === "loading";
   const empty = !loading && !error && result.rows.length === 0;
@@ -49,7 +54,12 @@ export function ResultsPanel({ result, status, phase, error, demo }: Props) {
       <div className="results-content">
         {error && (
           <div className="result-state result-state--error" role="alert">
-            <span>查询未完成</span><strong>{error}</strong><p>可以调整问题后重新运行，已有结果不会丢失。</p>
+            <span>查询未完成{errorCode ? <code className="error-code">{errorCode}</code> : null}</span><strong>{error}</strong><p>可以调整问题后重新运行，已有结果不会丢失。</p>
+          </div>
+        )}
+        {paging?.truncated && !error && (
+          <div className="result-state result-state--notice" role="status">
+            <span>结果已截断<code className="error-code">RESULT_TRUNCATED</code></span><strong>超过 100 行上限，仅返回前 100 行，请加筛选条件后重试。</strong>
           </div>
         )}
         {empty && (
@@ -73,7 +83,14 @@ export function ResultsPanel({ result, status, phase, error, demo }: Props) {
                 ))}
               </tbody>
             </table>
-            <div className="table-footer"><span>{demo ? "演示快照 · 运行查询后替换为实时结果" : `问题：${result.question}`}</span><span>{result.rows.length} / {result.row_count}</span></div>
+            <div className="table-footer"><span>{demo ? "演示快照 · 运行查询后替换为实时结果" : `问题：${result.question}`}</span>{paging && onPageChange ? (
+              <span className="pager">
+                <span>{result.rows.length} / {result.row_count}</span>
+                <button type="button" onClick={() => onPageChange(paging.page - 1)} disabled={loading || paging.page <= 1}>上一页</button>
+                <span>第 {paging.page} / {paging.totalPages} 页</span>
+                <button type="button" onClick={() => onPageChange(paging.page + 1)} disabled={loading || paging.page >= paging.totalPages}>下一页</button>
+              </span>
+            ) : <span>{result.rows.length} / {result.row_count}</span>}</div>
           </div>
         )}
         {!error && !empty && tab === "chart" && <ChartPreview result={result} />}

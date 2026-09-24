@@ -11,6 +11,8 @@ type Props = {
   live: boolean;
   onQuestionChange: (question: string) => void;
   onSubmit: () => void;
+  /** 覆盖默认示例问题（v1 演示用） */
+  examples?: string[];
 };
 
 const phaseLabels: Record<QueryPhase, string> = {
@@ -22,7 +24,7 @@ const phaseLabels: Record<QueryPhase, string> = {
   complete: "查询已完成",
 };
 
-export function QueryComposer({ question, status, phase, live, onQuestionChange, onSubmit }: Props) {
+export function QueryComposer({ question, status, phase, live, onQuestionChange, onSubmit, examples }: Props) {
   const loading = status === "loading";
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -63,7 +65,7 @@ export function QueryComposer({ question, status, phase, live, onQuestionChange,
 
       <div className="example-row">
         <span>试试这些</span>
-        {exampleQuestions.map((item) => (
+        {(examples ?? exampleQuestions).map((item) => (
           <button type="button" key={item} onClick={() => onQuestionChange(item)} disabled={loading}>{item}</button>
         ))}
       </div>
