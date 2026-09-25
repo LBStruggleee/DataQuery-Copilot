@@ -32,6 +32,8 @@ def main() -> int:
 
     args = parser.parse_args()
     if args.command == "create":
+        if args.quota < 0:
+            parser.error("--quota 必须 >= 0")
         print(create_key(args.db, args.name, args.quota))
     elif args.command == "list":
         for item in list_keys(args.db):

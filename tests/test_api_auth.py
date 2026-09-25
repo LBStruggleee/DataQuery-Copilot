@@ -30,6 +30,14 @@ def test_create_and_verify_key(tmp_path):
     assert isinstance(key_hash, str) and len(key_hash) == 64
 
 
+def test_create_key_rejects_negative_quota(tmp_path):
+    from api.auth import create_key
+
+    db = _fresh_db(tmp_path)
+    with pytest.raises(ValueError, match="daily_quota"):
+        create_key(db, "ci", daily_quota=-5)
+
+
 def test_unknown_and_revoked_keys_rejected(tmp_path):
     from api.auth import create_key, revoke_key, verify_key
     from api.errors import APIError

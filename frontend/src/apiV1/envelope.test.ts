@@ -65,7 +65,7 @@ describe("fetchEnvelope", () => {
     expect((error as V1ApiError).code).toBe("UNKNOWN");
   });
 
-  it("网络失败原样抛出 TypeError（供 App 回退 mock）", async () => {
+  it("网络失败原样抛出 TypeError", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
     const error = await fetchEnvelope("/query").catch((e) => e);
     expect(error).toBeInstanceOf(TypeError);

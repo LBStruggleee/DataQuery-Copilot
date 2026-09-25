@@ -57,6 +57,8 @@ def _hash(plaintext: str) -> str:
 
 def create_key(db_path: str, name: str, daily_quota: int = DEFAULT_DAILY_QUOTA) -> str:
     """签发 Key：返回明文（只显示一次），库里只存哈希。"""
+    if daily_quota < 0:
+        raise ValueError(f"daily_quota 必须 >= 0， got {daily_quota}")
     init_auth_tables(db_path)
     plaintext = KEY_PREFIX + secrets.token_urlsafe(32)
     conn = sqlite3.connect(db_path)
