@@ -1,4 +1,5 @@
 .env
+.idea/
 backups/
 .e2e/
 .soak/

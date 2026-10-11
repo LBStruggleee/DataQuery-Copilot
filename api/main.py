@@ -2,8 +2,11 @@
 
 import logging
 import os
+import shutil
 import sys
 import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Query, UploadFile
@@ -55,6 +58,35 @@ def new_request_id() -> str:
     return f"req_{uuid.uuid4().hex[:12]}"
 
 
+# 构建期示例库路径（render.yaml / Dockerfile.api 的 buildCommand 生成在这里）
+SEED_DB_PATH = "data/query.db"
+
+
+def ensure_database(db_path: str, seed_path: str = SEED_DB_PATH) -> bool:
+    """库文件缺失时用构建期示例库播种（P1-20：Render 挂载盘首次启动为空）。
+
+    返回是否执行了播种；库已存在、路径与示例库相同或无示例库可播时不动作。
+    """
+    if Path(db_path).is_file():
+        return False
+    if Path(db_path).resolve() == Path(seed_path).resolve():
+        return False
+    if not Path(seed_path).is_file():
+        logger.warning("数据库 %s 不存在，且无示例库可播种（%s）", db_path, seed_path)
+        return False
+    parent = Path(db_path).parent
+    parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(seed_path, db_path)
+    logger.info("已从示例库播种数据库: %s -> %s", seed_path, db_path)
+    return True
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    ensure_database(os.getenv("DB_PATH", "data/query.db"), seed_path=SEED_DB_PATH)
+    yield
+
+
 def _envelope(code: str, message: str, data, request_id: str) -> dict:
     return {"version": "v1", "code": code, "message": message, "data": data, "request_id": request_id}
 
@@ -67,10 +99,27 @@ def create_app() -> FastAPI:
             handler = logging.StreamHandler(sys.stdout)
             handler.setFormatter(JsonFormatter())
             api_logger.addHandler(handler)
+    # P2-16：限流/配额/指标均为单进程内存态，多 worker 属误配，启动时明确告警
+    try:
+        workers = int(os.getenv("WEB_CONCURRENCY", "1"))
+    except ValueError:
+        workers = 1
+    if workers > 1:
+        logger.warning(
+            "检测到 WEB_CONCURRENCY=%s：限流/配额/指标为单进程内存态，"
+            "多 worker 下将失效且重启归零；请保持单 worker 或迁移 Redis",
+            workers,
+        )
+    # P2-31：生产可通过 DQC_DISABLE_DOCS=1 关闭 /docs、/redoc、/openapi.json
+    disable_docs = os.getenv("DQC_DISABLE_DOCS") == "1"
     application = FastAPI(
         title="DataQuery Copilot API",
         version="0.1.0",
         description="HTTP bridge for the DataQuery Copilot frontend",
+        lifespan=_lifespan,
+        docs_url=None if disable_docs else "/docs",
+        redoc_url=None if disable_docs else "/redoc",
+        openapi_url=None if disable_docs else "/openapi.json",
     )
 
     origins = [
@@ -108,6 +157,19 @@ def create_app() -> FastAPI:
             status_code=422,
             content=_envelope("INVALID_QUESTION", f"请求参数校验失败: {detail}", None, new_request_id()),
         )
+
+    @application.get("/api/health", include_in_schema=False)
+    def health_probe() -> dict:
+        """免鉴权存活探针（P0-01）：只回报进程与库文件状态，供 Render/HEALTHCHECK 使用。
+
+        不挂 require_api_key、不进 v1 契约（include_in_schema=False）、
+        不读取数据库内容，无敏感信息。
+        """
+        database_ready = Path(os.getenv("DB_PATH", "data/query.db")).is_file()
+        return {
+            "status": "ok" if database_ready else "degraded",
+            "database_ready": database_ready,
+        }
 
     @application.get("/api/v1/health", response_model=ApiEnvelope[HealthResponse])
     def health_v1(service: DataQueryService = Depends(get_query_service),

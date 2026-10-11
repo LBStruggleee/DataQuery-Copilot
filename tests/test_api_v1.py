@@ -193,7 +193,7 @@ def test_v0_routes_removed():
     from api.main import create_app
 
     with TestClient(create_app()) as client:
-        assert client.get("/api/health").status_code == 404
+        # /api/health 自 P0-01 起为免鉴权存活探针（见 test_ops_health.py），不再属于已移除的 v0 路由
         assert client.get("/api/schema").status_code == 404
         assert client.get("/api/quality").status_code == 404
         assert client.post("/api/query", json={"question": "有效问题"}).status_code == 404

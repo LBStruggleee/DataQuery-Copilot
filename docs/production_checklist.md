@@ -13,14 +13,16 @@
 ## 上线中
 
 - [ ] 容器注入环境变量（绝不进镜像）：`DEEPSEEK_API_KEY`、`DB_PATH`、（可选）`DQC_JSON_LOGS=1`
-- [ ] 启动后冒烟：`GET /api/v1/health` 200；签发管理 Key：`python scripts/manage_keys.py create --name admin`
-- [ ] 用管理 Key 调一遍核心链路：health / schema / quality / datasets / query（小问题）/ metrics
+- [ ] 启动后先冒烟免鉴权探针：`GET /api/health` 200（无需 Key）
+- [ ] 签发管理 Key：`python scripts/manage_keys.py create --name admin`
+- [ ] 用管理 Key 冒烟：`GET /api/v1/health` 200（该端点必须带 `X-API-Key`，须在签发 Key 之后执行）
+- [ ] 用管理 Key 调一遍核心链路：schema / quality / datasets / query（小问题）/ metrics
 - [ ] 前端构建产物部署到静态托管，`VITE_API_BASE_URL` 指向 API 域名
 
 ## 上线后
 
-- [ ] uptime 监控占位：任选免费服务监控 `GET /api/v1/health`（未配置前手动每天看一次 metrics）
-- [ ] 备份任务：每天 `python scripts/backup_db.py --keep 14`（cron/systemd timer），每月做一次恢复演练
+- [ ] uptime 监控占位：任选免费服务监控 `GET /api/health`（免鉴权，可直接作探针；`/api/v1/health` 需 Key 不适合）；未配置前手动每天看一次 metrics
+- [ ] 备份任务：每天 `python scripts/backup_db.py --keep 14`（cron/systemd timer/Render Cron Job 样例见 `docs/deployment.md`「备份与恢复」），每月做一次恢复演练
 - [ ] Key 轮换：管理 Key 每 90 天 `revoke` + `create`；离职/泄露立即吊销
 - [ ] 费用：每周看一次 `query_requests`（metrics）× 单价，超预算先降被测 Key 配额
 - [ ] 已知上限（实测）：20 并发下 `/api/v1/quality` p95 约 4s（见 `load/README.md`），优化前不要把 quality 暴露给高频调用

@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+# P2-45：同一分支/PR 只保留最新一次运行，旧 run 自动取消
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   api-smoke:
     runs-on: ubuntu-latest
@@ -12,12 +17,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
       - name: Install Python dependencies
         run: pip install -r requirements-dev.txt
       - name: Prepare demo database
         run: python scripts/prepare_demo_db.py
-      - name: Run API and visualization smoke tests
-        run: python -m pytest tests/test_api.py tests/test_visualizer.py -q
+      # P1-13：全量后端测试进 CI（含鉴权/契约/数据层，不再只跑冒烟子集）
+      - name: Run full backend test suite
+        run: python -m pytest tests/ -q
+
+  # P1-17：后端 lint 门禁（ruff）。非阻塞（continue-on-error），
+  # 首次接入先暴露存量问题，不挡合流；后续可移除该开关收紧。
+  lint:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install ruff
+        run: pip install ruff
+      - name: Ruff lint (non-blocking)
+        run: ruff check api src scripts tests
 
   frontend-build:
     runs-on: ubuntu-latest

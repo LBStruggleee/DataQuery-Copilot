@@ -2,22 +2,33 @@ services:
   - type: web
     name: dataquery-copilot-api
     runtime: python
-    buildCommand: pip install -r requirements.txt && python scripts/generate_sample_data.py && python scripts/prepare_demo_db.py
+    # 构建期把示例库固定生成在 data/query.db（P1-20：磁盘只在运行期挂载，
+    # 构建环境写不了 /var/data，故显式覆盖 DB_PATH）；应用 lifespan 首次启动
+    # 时若 DB_PATH 无库文件会自动把该示例库播种到挂载点。
+    buildCommand: pip install -r requirements.txt && python scripts/generate_sample_data.py && DB_PATH=data/query.db python scripts/prepare_demo_db.py
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
+    disk:
+      name: dataquery-copilot-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: DEEPSEEK_API_KEY
         sync: false
       - key: MODEL_NAME
         value: deepseek-chat
       - key: DB_PATH
-        value: data/query.db
+        value: /var/data/query.db
       - key: DATA_FILE
         value: data/sample_ecommerce.csv
       - key: TABLE_NAME
         value: orders
       - key: CORS_ORIGINS
         sync: false
+      - key: DQC_DISABLE_DOCS
+        value: "1"
+      - key: DQC_JSON_LOGS
+        value: "1"
 
   - type: web
     name: dataquery-copilot-frontend
