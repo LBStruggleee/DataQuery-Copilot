@@ -65,3 +65,62 @@ def test_clean_full_flow(dirty_data):
     cleaned = cleaner.clean(dirty_data, strategy="auto")
     assert cleaned.isna().sum().sum() == 0
     assert len(cleaned) == 5  # auto 策略不删除行
+
+
+# ── P1-02: 缺失值不再被污染成字符串 'None' ──────────────
+
+def test_standardize_formats_preserves_nan():
+    """P1-02: astype(str) 污染修复——缺失值保留为 NaN 而非字面量 'None'"""
+    cleaner = DataCleaner()
+    df = pd.DataFrame({"name": [" alice ", None, " bob "]})
+    cleaned = cleaner.standardize_formats(df)
+    assert cleaned["name"].iloc[0] == "alice"
+    assert pd.isna(cleaned["name"].iloc[1])  # NaN 保留
+    assert cleaned["name"].iloc[2] == "bob"
+
+
+def test_standardize_formats_keeps_non_string_values():
+    """P1-02: object 列中的非字符串值不受 strip 影响"""
+    cleaner = DataCleaner()
+    df = pd.DataFrame({"v": pd.Series([1, " a ", None], dtype=object)})
+    cleaned = cleaner.standardize_formats(df)
+    assert cleaned["v"].iloc[0] == 1
+    assert cleaned["v"].iloc[1] == "a"
+    assert pd.isna(cleaned["v"].iloc[2])
+
+
+# ── P2-06: 数值判定认 pandas 可空扩展类型 ───────────────
+
+def test_handle_missing_values_fill_nullable_int():
+    """P2-06: Int64 列走数值分支，fillna('unknown') 不再 TypeError"""
+    cleaner = DataCleaner()
+    df = pd.DataFrame({"amount": pd.array([1, None, 3], dtype="Int64")})
+    cleaned = cleaner.handle_missing_values(df, strategy="fill")
+    assert cleaned["amount"].isna().sum() == 0
+
+
+def test_handle_missing_values_auto_nullable_int():
+    """P2-06: Int64 列 auto 策略用中位数填充"""
+    cleaner = DataCleaner()
+    df = pd.DataFrame({"amount": pd.array([1, None, 3], dtype="Int64")})
+    cleaned = cleaner.handle_missing_values(df, strategy="auto")
+    assert cleaned["amount"].isna().sum() == 0
+    assert cleaned["amount"].tolist() == [1, 2, 3]
+
+
+def test_detect_outliers_nullable_int():
+    """P2-06: Int64 列可正常检测异常值"""
+    cleaner = DataCleaner()
+    df = pd.DataFrame({"amount": pd.array([1, 2, 3, 1000], dtype="Int64")})
+    outliers = cleaner.detect_outliers(df, "amount", method="iqr")
+    assert len(outliers) == 1
+
+
+# ── P2-07: 未知 method 显式报错 ─────────────────────────
+
+def test_detect_outliers_unknown_method_raises():
+    """P2-07: 未支持的 method 抛 ValueError，不再静默返回空表"""
+    cleaner = DataCleaner()
+    df = pd.DataFrame({"amount": [1.0, 2.0, 3.0]})
+    with pytest.raises(ValueError):
+        cleaner.detect_outliers(df, "amount", method="zscore")

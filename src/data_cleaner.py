@@ -7,7 +7,7 @@
 
 import pandas as pd
 import numpy as np
-from typing import Optional, Literal
+from typing import Literal
 
 
 class DataCleaner:
@@ -50,7 +50,8 @@ class DataCleaner:
             if df[col].isna().sum() == 0:
                 continue
 
-            if df[col].dtype in [np.float64, np.int64, float, int]:
+            # 用 is_numeric_dtype 判定，兼容 pandas 可空扩展类型（Int64/Float64）
+            if pd.api.types.is_numeric_dtype(df[col]):
                 if strategy == "auto":
                     fill_val = df[col].median()
                 else:
@@ -75,7 +76,7 @@ class DataCleaner:
         Args:
             df: DataFrame
             column: 要检测的列名
-            method: 目前支持 "iqr"
+            method: 目前支持 "iqr"；未知方法抛 ValueError
 
         Returns:
             只包含异常行的 DataFrame
@@ -83,20 +84,21 @@ class DataCleaner:
         if column not in df.columns:
             raise ValueError(f"列不存在: {column}")
 
-        if df[column].dtype not in [np.float64, np.int64, float, int]:
+        if method != "iqr":
+            raise ValueError(f"不支持的异常值检测方法: {method!r}（当前仅支持 'iqr'）")
+
+        # 用 is_numeric_dtype 判定，兼容 pandas 可空扩展类型（Int64/Float64）
+        if not pd.api.types.is_numeric_dtype(df[column]):
             raise ValueError(f"列 {column} 不是数值类型，无法检测异常值")
 
-        if method == "iqr":
-            Q1 = df[column].quantile(0.25)
-            Q3 = df[column].quantile(0.75)
-            IQR = Q3 - Q1
-            lower_bound = Q1 - 1.5 * IQR
-            upper_bound = Q3 + 1.5 * IQR
+        Q1 = df[column].quantile(0.25)
+        Q3 = df[column].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
 
-            outliers = df[(df[column] < lower_bound) | (df[column] > upper_bound)]
-            return outliers
-
-        return pd.DataFrame()
+        outliers = df[(df[column] < lower_bound) | (df[column] > upper_bound)]
+        return outliers
 
     def standardize_formats(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -108,9 +110,10 @@ class DataCleaner:
         df = df.copy()
 
         for col in df.columns:
-            # 字符串列去空格
-            if df[col].dtype == "object":
-                df[col] = df[col].astype(str).str.strip()
+            # 字符串列去空格：仅对字符串值 strip，缺失值（NaN/None）原样保留，
+            # 非字符串值也不受影响——禁止整列 astype(str) 把缺失值污染成字面量 'None'
+            if pd.api.types.is_object_dtype(df[col]):
+                df[col] = df[col].map(lambda v: v.strip() if isinstance(v, str) else v)
 
             # 日期列统一格式
             if pd.api.types.is_datetime64_any_dtype(df[col]):

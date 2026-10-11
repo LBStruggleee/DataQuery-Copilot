@@ -2,6 +2,7 @@
 QueryEngine 单元测试 — 用 mock LLM 避免 API 调用
 """
 import json
+import logging
 import os
 import tempfile
 import sqlite3
@@ -20,17 +21,22 @@ class FakeLLM:
         self._sql = sql
         self.generate_calls = []
         self.fix_calls = []
+        self.fix_history = []
+        self._validator = None  # 复用 LLMClient，避免高频构造 httpx 客户端拖慢测试
 
     def generate_sql(self, question, schema_text):
         self.generate_calls.append(question)
         return self._sql
 
-    def fix_sql(self, question, schema_text, failed_sql, error_msg):
+    def fix_sql(self, question, schema_text, failed_sql, error_msg, history=None):
         self.fix_calls.append(failed_sql)
+        self.fix_history.append(history)
         return "SELECT * FROM orders LIMIT 10"
 
     def validate_sql(self, sql):
-        return LLMClient(api_key="test").validate_sql(sql)
+        if self._validator is None:
+            self._validator = LLMClient(api_key="test")
+        return self._validator.validate_sql(sql)
 
 
 @pytest.fixture
@@ -112,7 +118,7 @@ def test_ask_retry_exhausted(engine_with_mock):
     """测试重试耗尽：修正的 SQL 仍然无法执行"""
     engine_with_mock.llm._sql = "SELECT nonexistent FROM orders"
     # 让 fix_sql 也返回无效 SQL
-    engine_with_mock.llm.fix_sql = lambda *a: "SELECT also_bad FROM orders"
+    engine_with_mock.llm.fix_sql = lambda *a, **k: "SELECT also_bad FROM orders"
     result = engine_with_mock.ask("会失败的查询", max_retries=1)
     assert result["error"] is not None or result["valid"] is False
 
@@ -192,3 +198,210 @@ def test_logging_disabled(temp_db_path, sample_df):
     eng.ask("不应该记录")
     assert eng._log_file is None
     eng.close()
+
+
+# ── P1-03: 缓存键纳入表名 + load_data 清缓存 ────────────
+
+def test_cache_key_includes_table_name(engine, sample_df):
+    """P1-03: 切换表后相同问题不得命中旧表的缓存"""
+    engine.enable_cache = True
+    engine.llm = FakeLLM("SELECT COUNT(*) as cnt FROM orders")
+    conn = sqlite3.connect(engine.loader.db_path)
+    try:
+        sample_df.to_sql("products", conn, if_exists="replace", index=False)
+    finally:
+        conn.close()
+
+    engine.ask("总共有多少订单")
+    engine.table_name = "products"
+    result2 = engine.ask("总共有多少订单")
+    assert result2["from_cache"] is False
+    assert len(engine.llm.generate_calls) == 2  # 表不同，重新查询
+
+
+def test_load_data_clears_cache(engine, sample_df, tmp_path):
+    """P1-03: load_data 覆盖加载数据后旧缓存作废"""
+    engine.enable_cache = True
+    engine.llm = FakeLLM("SELECT COUNT(*) as cnt FROM orders")
+    engine.ask("总共有多少订单")
+    assert engine.cache_stats()["cache_size"] == 1
+
+    csv_path = tmp_path / "reload_orders.csv"
+    sample_df.to_csv(csv_path, index=False)
+    engine.load_data(str(csv_path))  # 同名表覆盖加载
+
+    assert engine.cache_stats()["cache_size"] == 0
+
+
+# ── P2-01: max_retries 校验 ─────────────────────────────
+
+def test_ask_rejects_negative_max_retries(engine):
+    """P2-01: max_retries < 0 直接拒绝，不再返回假成功"""
+    with pytest.raises(ValueError):
+        engine.ask("测试", max_retries=-1)
+
+
+# ── P2-02: 缓存 LRU 上限 + 日志轮转 ─────────────────────
+
+def test_cache_lru_eviction(engine, monkeypatch):
+    """P2-02: 缓存超过上限 100 后按 LRU 淘汰最早条目"""
+    import src.query_engine as qe
+    monkeypatch.setattr(qe, "CACHE_MAX_ENTRIES", 2)  # 调小上限便于测试
+    engine.enable_cache = True
+    engine.llm = FakeLLM("SELECT 1")
+
+    engine.ask("q1")
+    engine.ask("q2")
+    engine.ask("q1")  # 命中 → 移到队尾续命
+    engine.ask("q3")  # 淘汰 q2
+
+    keys = engine.cache_stats()["cached_questions"]
+    assert engine.cache_stats()["cache_size"] == 2
+    assert "orders::q1" in keys   # 最近使用的保留
+    assert "orders::q2" not in keys  # 最久未用的被淘汰
+
+
+def test_cache_lru_default_limit_100(engine):
+    """P2-02: 默认上限 100"""
+    engine.enable_cache = True
+    engine.llm = FakeLLM("SELECT 1")
+    for i in range(105):
+        engine.ask(f"问题{i}")
+    stats = engine.cache_stats()
+    assert stats["cache_size"] == 100
+    assert "orders::问题0" not in stats["cached_questions"]
+    assert "orders::问题104" in stats["cached_questions"]
+
+
+def test_query_log_rotation(temp_db_path, sample_df):
+    """P2-02: JSONL 日志超过大小上限后轮转为 *.1"""
+    conn = sqlite3.connect(temp_db_path)
+    try:
+        sample_df.to_sql("orders", conn, if_exists="replace", index=False)
+    finally:
+        conn.close()
+    eng = QueryEngine(db_path=temp_db_path, enable_cache=False, enable_log=True)
+    eng.llm = FakeLLM("SELECT 1")
+    eng._log_max_bytes = 10  # 调小阈值触发轮转
+    log_file = eng._log_file
+    rotated = log_file + ".1"
+    try:
+        eng.ask("第一条")
+        eng.ask("第二条")  # 触发轮转
+        eng.ask("第三条")  # 再次轮转，覆盖旧轮转文件
+    finally:
+        eng.close()
+
+    assert os.path.exists(rotated)
+    with open(rotated, "r", encoding="utf-8") as f:
+        assert len(f.readlines()) >= 1
+    with open(log_file, "r", encoding="utf-8") as f:
+        assert len(f.readlines()) >= 1
+    for p in (log_file, rotated):
+        if os.path.exists(p):
+            os.remove(p)
+
+
+# ── P2-03: 出入缓存深拷贝 ───────────────────────────────
+
+def test_cache_not_polluted_by_caller_mutation(engine):
+    """P2-03: 调用方原地修改返回的 DataFrame 不污染缓存"""
+    engine.enable_cache = True
+    engine.llm = FakeLLM("SELECT * FROM orders")
+    r1 = engine.ask("查订单")
+    amount_before = r1["data"]["amount"].iloc[0]
+    r1["data"].loc[0, "amount"] = -99999.0  # 调用方原地修改
+
+    r2 = engine.ask("查订单")
+    assert r2["from_cache"] is True
+    assert r2["data"]["amount"].iloc[0] == amount_before
+
+
+# ── P2-10: 核心库 print 改 logging ──────────────────────
+
+def test_ask_operational_messages_use_logging(engine, caplog, capsys):
+    """P2-10: 重试等运行信息走 logging，不再直接 print"""
+    engine.enable_log = False
+    engine.llm = FakeLLM("SELECT nonexistent FROM orders")  # 触发一次重试
+    with caplog.at_level(logging.WARNING, logger="src.query_engine"):
+        engine.ask("触发重试的查询")
+    assert any("重试" in r.message for r in caplog.records)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+
+# ── P2-12: 修正闭环携带失败历史 ─────────────────────────
+
+def test_fix_sql_receives_failure_history(engine_with_mock):
+    """P2-12: fix_sql 收到历次失败的 SQL 与错误摘要"""
+    sqls = ["SELECT nope1 FROM orders", "SELECT nope2 FROM orders", "SELECT * FROM orders LIMIT 1"]
+    engine_with_mock.llm._sql = sqls[0]
+    history_seen = []
+
+    def fake_fix(question, schema_text, failed_sql, error_msg, history=None):
+        history_seen.append(history)
+        return sqls[len(history_seen)]  # 依次返回下一个 SQL
+
+    engine_with_mock.llm.fix_sql = fake_fix
+    result = engine_with_mock.ask("反复失败的查询", max_retries=2)
+
+    assert result["valid"] is True
+    assert history_seen[0] == []  # 第一次修正无历史
+    assert len(history_seen[1]) == 1
+    assert "nope1" in history_seen[1][0]["sql"]
+    assert "no such column" in history_seen[1][0]["error"].lower()
+
+
+# ── P2-13: handle_missing 可选开关 ──────────────────────
+
+def test_ask_handle_missing_fills_nan(engine_with_mock):
+    """P2-13: handle_missing=True 接入 DataCleaner 缺失值填充"""
+    engine_with_mock.llm._sql = "SELECT * FROM orders"
+    result = engine_with_mock.ask("全部订单", handle_missing=True)
+    assert result["data"].isna().sum().sum() == 0
+
+
+def test_ask_handle_missing_default_off(engine_with_mock):
+    """P2-13: 默认关闭，保持原有行为（缺失值保留）"""
+    engine_with_mock.llm._sql = "SELECT * FROM orders"
+    result = engine_with_mock.ask("全部订单")
+    assert result["data"]["category"].isna().sum() == 1
+
+
+# ── error_code: 供下游结构化判断 ────────────────────────
+
+def test_ask_error_code_sql_rejected(engine_with_mock):
+    engine_with_mock.llm._sql = "DROP TABLE orders"
+    result = engine_with_mock.ask("删掉订单表")
+    assert result["error_code"] == "SQL_REJECTED"
+
+
+def test_ask_error_code_generation_failed(engine_with_mock):
+    def boom(question, schema_text):
+        raise RuntimeError("api down")
+    engine_with_mock.llm.generate_sql = boom
+    result = engine_with_mock.ask("测试")
+    assert result["error_code"] == "SQL_GENERATION_FAILED"
+
+
+def test_ask_error_code_execution_failed(engine_with_mock):
+    engine_with_mock.llm._sql = "SELECT nonexistent FROM orders"
+    engine_with_mock.llm.fix_sql = lambda *a, **k: "SELECT also_missing FROM orders"
+    result = engine_with_mock.ask("查询", max_retries=1)
+    assert result["error_code"] == "EXECUTION_FAILED"
+
+
+def test_ask_success_error_code_none(engine_with_mock):
+    engine_with_mock.llm._sql = "SELECT * FROM orders LIMIT 3"
+    result = engine_with_mock.ask("正常查询")
+    assert result["error"] is None
+    assert result["error_code"] is None
+
+
+# ── SUP-02: quality_check 复用表名白名单 ────────────────
+
+def test_quality_check_rejects_invalid_table_name(engine):
+    """SUP-02: quality_check 不再绕过核心库表名校验"""
+    engine.table_name = "orders; DROP TABLE orders"
+    with pytest.raises(ValueError):
+        engine.quality_check()

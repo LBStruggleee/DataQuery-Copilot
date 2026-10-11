@@ -6,12 +6,15 @@
 """
 
 import os
+import logging
 from pathlib import Path
 from typing import Optional
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")  # 非交互式后端，适合保存文件
 import matplotlib.pyplot as plt
+
+logger = logging.getLogger(__name__)
 
 # 中文显示支持
 plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial Unicode MS", "DejaVu Sans"]
@@ -45,7 +48,7 @@ class Visualizer:
             保存的文件路径，或 None
         """
         if df is None or len(df) == 0:
-            print("数据为空，无法生成图表")
+            logger.warning("数据为空，无法生成图表")
             return None
 
         chart_type = self._detect_chart_type(df)
@@ -59,7 +62,7 @@ class Visualizer:
         elif chart_type == "scatter":
             return self.scatter_plot(df, title, save)
         else:
-            print(f"数据特征不适合自动生成图表（{len(df.columns)}列），建议查看表格数据")
+            logger.warning("数据特征不适合自动生成图表（%s列），建议查看表格数据", len(df.columns))
             return None
 
     def _detect_chart_type(self, df: pd.DataFrame) -> str:
@@ -190,7 +193,7 @@ class Visualizer:
             filepath = os.path.join(self.output_dir, f"{safe_name}_{int(time.time())}.png")
             fig.savefig(filepath, dpi=150, bbox_inches="tight", facecolor="white")
             plt.close(fig)
-            print(f"图表已保存: {filepath}")
+            logger.debug("图表已保存: %s", filepath)
             return filepath
         else:
             plt.show()

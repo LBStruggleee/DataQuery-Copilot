@@ -10,6 +10,7 @@
 """
 
 import argparse
+import logging
 import os
 import sys
 from datetime import datetime
@@ -75,7 +76,8 @@ def cmd_interactive(args):
         print(f"\n首次运行，自动加载数据: {DATA_FILE}")
         engine.load_data(DATA_FILE)
 
-    engine.show_schema()
+    print("\n当前表结构:")
+    print(engine.show_schema())
 
     while True:
         print()
@@ -93,7 +95,7 @@ def cmd_interactive(args):
             break
 
         if question.lower() == "schema":
-            engine.show_schema()
+            print(engine.show_schema())
             continue
 
         if question.lower() == "report":
@@ -115,7 +117,9 @@ def cmd_interactive(args):
         # 自动可视化（≥2行数据才有图表价值，单值不画）
         if result["data"] is not None and len(result["data"]) >= 2:
             try:
-                viz.auto_visualize(result["data"], title=question[:30])
+                saved = viz.auto_visualize(result["data"], title=question[:30])
+                if saved:
+                    print(f"图表已保存: {saved}")
             except Exception as e:
                 print(f"可视化生成失败（不影响查询结果）: {e}")
 
@@ -138,7 +142,9 @@ def cmd_query(args):
 
     # 自动可视化（≥2行数据才有图表价值）
     if result["data"] is not None and len(result["data"]) >= 2 and not args.no_viz:
-        viz.auto_visualize(result["data"], title=args.question[:30])
+        saved = viz.auto_visualize(result["data"], title=args.question[:30])
+        if saved:
+            print(f"图表已保存: {saved}")
 
     engine.close()
 
@@ -236,7 +242,9 @@ def cmd_batch(args):
             status = "OK"
             if result["data"] is not None and len(result["data"]) >= 2 and not args.no_viz:
                 try:
-                    viz.auto_visualize(result["data"], title=question[:30])
+                    saved = viz.auto_visualize(result["data"], title=question[:30])
+                    if saved:
+                        print(f"图表已保存: {saved}")
                 except Exception:
                     pass
 
@@ -285,6 +293,9 @@ def cmd_batch(args):
 
 
 def main():
+    # 核心库的运行信息改走 logging（P2-10），CLI 在这里打开 INFO 级别保持界面可见
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     parser = argparse.ArgumentParser(
         description="DataQuery Copilot - 基于 LLM 的数据查询自动化工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,

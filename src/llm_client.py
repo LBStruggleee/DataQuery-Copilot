@@ -11,12 +11,37 @@ LLM 客户端 - LLM Client
 
 import os
 import re
-import json
+import logging
 from typing import Optional
 from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# 单次 LLM 调用超时（秒），可用环境变量 LLM_TIMEOUT_SECONDS 覆盖
+DEFAULT_TIMEOUT_SECONDS = 30.0
+# SDK 内建重试：连接错误/408/429/5xx 自动指数退避重试（瞬时故障容错）
+SDK_MAX_RETRIES = 2
+
+
+def _resolve_timeout(explicit: Optional[float]) -> float:
+    """解析超时配置：显式参数优先，其次环境变量，最后默认值"""
+    if explicit is not None:
+        return float(explicit)
+    raw = os.getenv("LLM_TIMEOUT_SECONDS")
+    if not raw:
+        return DEFAULT_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(
+            f"环境变量 LLM_TIMEOUT_SECONDS 必须是数字，当前值: {raw!r}"
+        ) from None
+    if value <= 0:
+        raise ValueError(f"环境变量 LLM_TIMEOUT_SECONDS 必须为正数，当前值: {raw!r}")
+    return value
 
 
 class LLMClient:
@@ -27,10 +52,14 @@ class LLMClient:
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         base_url: str = "https://api.deepseek.com/v1",
+        timeout: Optional[float] = None,
     ):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY", "")
         self.model = model or os.getenv("MODEL_NAME", "deepseek-chat")
         self.base_url = base_url
+        # 显式超时（默认 30s，环境变量 LLM_TIMEOUT_SECONDS 可覆盖），
+        # 避免 SDK 默认 600s 的挂起把线程池 worker 长时间占死
+        self.timeout = _resolve_timeout(timeout)
 
         if not self.api_key or self.api_key == "your_api_key_here":
             raise ValueError(
@@ -40,7 +69,12 @@ class LLMClient:
                 "3. 注册地址: https://platform.deepseek.com"
             )
 
-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=self.timeout,
+            max_retries=SDK_MAX_RETRIES,
+        )
 
     def generate_sql(self, question: str, schema_text: str) -> str:
         """
@@ -69,9 +103,9 @@ class LLMClient:
         raw_output = response.choices[0].message.content.strip()
         sql = self._extract_sql(raw_output)
 
-        # 调试：打印 LLM 原始返回和提取结果，方便排查问题
-        print(f"\n[DEBUG] LLM 原始返回:\n{raw_output}\n")
-        print(f"[DEBUG] 提取的 SQL:\n{sql}\n")
+        # 调试信息走 logging（debug 级别），避免 API 服务下混入服务器日志/泄露内容
+        logger.debug("LLM 原始返回:\n%s", raw_output)
+        logger.debug("提取的 SQL:\n%s", sql)
 
         return sql
 
@@ -166,6 +200,12 @@ ORDER BY total_sales DESC
         sql_clean = re.sub(r"--[^\n]*", "", sql_clean)    # 移除单行注释
         sql_clean = re.sub(r"/\*.*?\*/", "", sql_clean, flags=re.DOTALL)  # 移除多行注释
 
+        # 显式拒绝多语句：分号后还有非空白内容即为多语句
+        # （此前依赖 sqlite3 单语句限制打回，白白消耗一轮 LLM 修正调用）
+        statements = [s for s in sql_clean.split(";") if s.strip()]
+        if len(statements) > 1:
+            return False
+
         # 禁止的关键词（用词边界匹配，避免 "created_at" 误命中 "CREATE"）
         forbidden = [
             r"\bINSERT\b", r"\bUPDATE\b", r"\bDELETE\b", r"\bDROP\b",
@@ -176,18 +216,20 @@ ORDER BY total_sales DESC
             if re.search(pattern, sql_clean):
                 return False
 
-        # 必须以 SELECT 开头（允许前面有注释或 WITH）
-        lines = sql_clean.split("\n")
-        code_lines = [l for l in lines if not l.strip().startswith("--")]
-        sql_clean = "\n".join(code_lines).strip()
-
+        # 必须以 SELECT 开头（允许前面有注释或 WITH，注释已在上方被移除）
+        sql_clean = sql_clean.strip()
         if not (sql_clean.startswith("SELECT") or sql_clean.startswith("WITH")):
             return False
 
         return True
 
     def fix_sql(
-        self, question: str, schema_text: str, failed_sql: str, error_message: str
+        self,
+        question: str,
+        schema_text: str,
+        failed_sql: str,
+        error_message: str,
+        history: Optional[list] = None,
     ) -> str:
         """
         SQL 自动修正 — 当执行失败时，把错误信息回传给 LLM 让它修正
@@ -197,19 +239,35 @@ ORDER BY total_sales DESC
         Args:
             question: 原始自然语言问题
             schema_text: 表结构描述
-            failed_sql: 执行失败的 SQL
+            failed_sql: 执行失败的 SQL（最近一次）
             error_message: 数据库返回的错误信息
+            history: 历次失败的尝试列表，元素为 {"sql": ..., "error": ...}，
+                     会写入 prompt 避免修正时原样重放旧写法
 
         Returns:
             修正后的 SQL 字符串
         """
         system_prompt = self._build_system_prompt(schema_text)
 
+        # 历次失败记录（不含当前这次），让 LLM 看到完整的失败轨迹
+        prior_attempts = history or []
+        history_block = ""
+        if prior_attempts:
+            lines = ["历次失败的尝试（不要重复这些写法）:"]
+            for idx, item in enumerate(prior_attempts, 1):
+                lines.append(f"尝试 {idx}:")
+                lines.append("```sql")
+                lines.append(str(item.get("sql", "")))
+                lines.append("```")
+                lines.append(f"错误摘要: {item.get('error', '')}")
+                lines.append("")
+            history_block = "\n".join(lines) + "\n"
+
         fix_prompt = f"""问题: {question}
 
 之前生成的 SQL 执行失败了，请根据错误信息修正 SQL。
 
-失败的 SQL:
+{history_block}最新失败的 SQL:
 ```sql
 {failed_sql}
 ```
@@ -217,7 +275,11 @@ ORDER BY total_sales DESC
 错误信息:
 {error_message}
 
-请分析错误原因，返回修正后的 SQL。只返回 SQL 语句，用 ```sql 代码块包裹。"""
+请分析错误原因，避免重复历次尝试中已失败的写法，返回修正后的 SQL。只返回 SQL 语句，用 ```sql 代码块包裹。"""
+
+        # 随失败次数逐步调温：温度 0.1 近似确定性输出，失败原样重放时
+        # 需要提高随机性才能跳出重复失败
+        temperature = min(0.1 + 0.15 * len(prior_attempts), 0.7)
 
         response = self.client.chat.completions.create(
             model=self.model,
@@ -225,12 +287,12 @@ ORDER BY total_sales DESC
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": fix_prompt},
             ],
-            temperature=0.1,
+            temperature=temperature,
             max_tokens=2000,
         )
 
         raw_output = response.choices[0].message.content.strip()
         sql = self._extract_sql(raw_output)
 
-        print(f"\n[DEBUG] LLM 修正后的 SQL:\n{sql}\n")
+        logger.debug("LLM 修正后的 SQL:\n%s", sql)
         return sql
