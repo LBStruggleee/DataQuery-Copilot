@@ -133,8 +133,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: No tracked .env files
+        # 收尾修复第2轮：白名单排除 *.example——原正则 `(^|/)\.env(\.|$)` 会命中
+        # 被跟踪的模板文件 .env.example / frontend/.env.example（/.env 后跟 .example
+        # 的点），导致本门禁在 HEAD 恒 exit 1；现仅拦截真实 env 文件（.env/.env.local 等）
         run: |
-          tracked=$(git ls-files | grep -E '(^|/)\.env(\.|$)' || true)
+          tracked=$(git ls-files | grep -E '(^|/)\.env(\.|$)' | grep -v -E '\.example$' || true)
           if [ -n "$tracked" ]; then echo "tracked env files: $tracked"; exit 1; fi
           echo "no tracked .env"
       - name: No plaintext secrets in source

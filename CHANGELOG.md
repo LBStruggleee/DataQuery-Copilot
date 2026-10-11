@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 2026-10-12 · 收尾修复第2轮（fix(assessment)）
+
+#### 修复
+
+- **CI secret-sweep 门禁恒红（独立复核 blocker）**：`No tracked .env files` 步骤的正则 `(^|/)\.env(\.|$)` 会命中被跟踪的模板文件 `.env.example` / `frontend/.env.example`（`/.env` 后跟 `.example` 的点即命中 `(\.|$)` 分支），实测 `git ls-files | grep -E '(^|/)\.env(\.|$)'` 输出这两个文件，导致该阻塞门禁在含模板文件的任何提交上恒 exit 1、掩盖真回归。改为白名单式——主匹配后接 `grep -v -E '\.example$'` 排除模板，仅拦截真实 env 文件（`.env`、`.env.local`、`.env.production` 等）；修复后实测对当前 HEAD 放行、对真实 env 文件样例全部拦截。
+- **文档用例数回归（P1-12「数字=实际」状态回补，独立复核 blocker）**：收尾第1轮新增 4 个测试后未同步文档数字，README.md（目录树与完成清单两处）与 docs/v1_contract_proposal.md 仍写「245」。现同步为本批实测收集数「252」（249 + 本批新增 3 个回归测试）。
+
+#### 新增
+
+- 测试：`tests/test_ci_gate.py`（2 例——secret-sweep 必须放行被跟踪的 `*.example` 模板、真实 env 文件与普通文件仍被正确区分，以 Python re 模拟 `grep -E | grep -v -E` 管道并直接从 ci.yml 提取模式）；`tests/test_docs_sync.py`（1 例——README 与契约文档的后端用例数声明必须等于 `pytest --collect-only` 实测收集数，补测试时数字漂移会被门禁拦下）。全量 `python -m pytest tests/ -q` 实测 252 passed。
+
 ### 2026-10-12 · 收尾修复第1轮（fix(assessment)）
 
 #### 修复

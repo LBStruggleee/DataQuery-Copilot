@@ -117,7 +117,7 @@ dataquery-copilot/
 ├── render.yaml             # Render 前后端 Blueprint
 ├── .github/workflows/      # CI：全量后端测试 / lint / 前端构建 / 密钥清扫
 ├── load/                  # 负载压测脚本（load/soak.py）与说明（load/README.md）
-├── tests/                 # 单元测试（pytest，245 个用例）
+├── tests/                 # 单元测试（pytest，252 个用例）
 │   ├── __init__.py
 │   ├── conftest.py
 │   ├── test_api.py
@@ -157,7 +157,7 @@ dataquery-copilot/
 - [x] 可视化输出
 - [x] SQL 安全校验增强（词边界匹配 + 字符串/注释过滤）
 - [x] 批量查询 CLI（从文件读取 + 汇总报告）
-- [x] 单元测试（pytest，245 个测试用例）
+- [x] 单元测试（pytest，252 个测试用例）
 - [x] 性能优化（查询缓存 + SQL 自动重试 + 查询日志）
 - [x] React 工作台 v0 与核心交互
 - [x] 深浅主题、响应式和键盘交互
