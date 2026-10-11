@@ -396,6 +396,29 @@ def test_ask_error_code_execution_failed(engine_with_mock):
     assert result["error_code"] == "EXECUTION_FAILED"
 
 
+def test_ask_error_code_execution_timeout_no_retry(engine_with_mock, monkeypatch):
+    """P1-04 收尾：SQL 执行超时返回 EXECUTION_TIMEOUT，且不进入 LLM 修正重试。
+
+    data_loader 的 query_timeout 进度回调中断（P1-05）抛 TimeoutError；超时每轮已耗满
+    query_timeout 预算、LLM 修正无法恢复，重试只会倍增延迟——ask() 必须立即返回结构化
+    错误码，由 API 层映射为契约 QUERY_TIMEOUT(504)。
+    """
+    executed = []
+
+    def timeout_execute(sql, max_rows=None, allowed_tables=None):
+        executed.append(sql)
+        raise TimeoutError("SQL 执行超过 10.0s，已被中断")
+
+    monkeypatch.setattr(engine_with_mock.loader, "execute_query", timeout_execute)
+    result = engine_with_mock.ask("慢查询", max_retries=2)
+
+    assert result["error_code"] == "EXECUTION_TIMEOUT"
+    assert result["valid"] is True  # SQL 已通过安全校验，仅执行阶段超时
+    assert result["error"] is not None and "已被中断" in result["error"]
+    assert len(executed) == 1  # 不重试
+    assert engine_with_mock.llm.fix_calls == []  # 未触发 LLM 修正调用
+
+
 def test_ask_success_error_code_none(engine_with_mock):
     engine_with_mock.llm._sql = "SELECT * FROM orders LIMIT 3"
     result = engine_with_mock.ask("正常查询")

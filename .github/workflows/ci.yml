@@ -26,7 +26,7 @@ jobs:
       - name: Run full backend test suite
         run: python -m pytest tests/ -q
 
-  # P1-17：后端 lint 门禁（ruff）。非阻塞（continue-on-error），
+  # P1-17：后端 lint 与类型检查。非阻塞（continue-on-error），
   # 首次接入先暴露存量问题，不挡合流；后续可移除该开关收紧。
   lint:
     runs-on: ubuntu-latest
@@ -37,10 +37,81 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install ruff
-        run: pip install ruff
+      - name: Install lint/type dependencies
+        run: pip install -r requirements-dev.txt
       - name: Ruff lint (non-blocking)
         run: ruff check api src scripts tests
+      # P1-17 收尾：后端类型检查门禁（存量 11 处标注问题，见 pyproject [tool.mypy] 注释）
+      - name: Mypy type check (non-blocking)
+        run: mypy api src
+
+  # P1-17 收尾：前端 vitest 单测门禁——此前前端测试只存在于本地，CI 完全不执行
+  frontend-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Run frontend unit tests (vitest)
+        run: npm test
+
+  # P1-17 收尾：Playwright e2e 真实链路进 CI（P1-15 已交付 bash 入口与 Key 注入，
+  # e2e_up.sh 自动准备隔离库 → 签发测试 Key → 拉起后端/前端跑全部用例）
+  frontend-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Prepare demo database
+        run: python scripts/prepare_demo_db.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Run Playwright e2e (real backend link)
+        run: bash scripts/e2e_up.sh
+
+  # P1-17 收尾：依赖安全审计（pip-audit 实测 0 漏洞、npm audit --omit=dev 实测 0 漏洞，
+  # 故作为阻塞门禁；后续出现新 advisory 时升级依赖版本即可）
+  deps-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: pip-audit on requirements
+        run: pip-audit -r requirements.txt -r requirements-dev.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm audit (production dependencies)
+        run: npm audit --omit=dev
+        working-directory: frontend
 
   frontend-build:
     runs-on: ubuntu-latest

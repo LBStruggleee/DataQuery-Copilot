@@ -224,4 +224,4 @@ python -c "import sqlite3; print(sqlite3.connect('/tmp/restored.db').execute('SE
 
 ### CI 检查
 
-GitHub Actions 会执行全量后端测试（`pytest tests/ -q`）、非阻塞 ruff lint、React 生产构建与密钥清扫，配置文件为 `.github/workflows/ci.yml`。
+GitHub Actions 会执行全量后端测试（`pytest tests/ -q`）、前端 vitest 单测与 Playwright e2e 真实链路、依赖安全审计（pip-audit / npm audit）、非阻塞 ruff lint 与 mypy 类型检查、React 生产构建与密钥清扫，配置文件为 `.github/workflows/ci.yml`。

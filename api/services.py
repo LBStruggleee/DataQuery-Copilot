@@ -106,6 +106,8 @@ class DataQueryService:
     _ENGINE_ERROR_CODES: dict[str, tuple[ErrorCode, int]] = {
         "SQL_REJECTED": (ErrorCode.SQL_REJECTED, 422),
         "SQL_GENERATION_FAILED": (ErrorCode.SERVICE_UNAVAILABLE, 503),
+        # P1-04 收尾：执行超时落地契约 §4.2 的 QUERY_TIMEOUT | 504（此前漂移为 500/QUERY_FAILED）
+        "EXECUTION_TIMEOUT": (ErrorCode.QUERY_TIMEOUT, 504),
         "EXECUTION_FAILED": (ErrorCode.QUERY_FAILED, 500),
     }
 

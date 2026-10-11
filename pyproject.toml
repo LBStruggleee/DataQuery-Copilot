@@ -24,7 +24,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "httpx>=0.27.0",
-    "pytest>=8.0.0,<9.0.0",
+    # pytest>=9.0.3：修复 PYSEC-2026-1845（与 requirements-dev.txt 同步）
+    "pytest>=9.0.3,<10.0.0",
 ]
 
 [project.scripts]
@@ -36,3 +37,10 @@ packages = ["api", "src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+# P1-17 收尾：首次接入 mypy（CI 中暂为非阻塞）。存量代码标注不全，
+# 先以默认严格度报告真实类型问题；三方库桩缺失统一忽略，避免噪音淹没信号。
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+

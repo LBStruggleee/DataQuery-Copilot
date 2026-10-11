@@ -126,6 +126,8 @@ def test_query_page_maps_engine_errors(monkeypatch, tmp_path, engine_error, code
     [
         ("SQL_REJECTED", "措辞已改，不含「安全校验」", "SQL_REJECTED"),
         ("SQL_GENERATION_FAILED", "上游 401", "SERVICE_UNAVAILABLE"),
+        # P1-04 收尾：执行超时落地契约 QUERY_TIMEOUT(504)
+        ("EXECUTION_TIMEOUT", "SQL 执行超过 10.0s，已被中断", "QUERY_TIMEOUT"),
         ("EXECUTION_FAILED", "no such table: archive", "TABLE_NOT_FOUND"),
         ("EXECUTION_FAILED", "no such column: x", "QUERY_FAILED"),
         ("UNKNOWN_FUTURE_CODE", "whatever", "QUERY_FAILED"),
@@ -149,8 +151,18 @@ def test_engine_error_codes_are_wired_from_src():
     from api.services import DataQueryService
 
     assert set(DataQueryService._ENGINE_ERROR_CODES) == {
-        "SQL_REJECTED", "SQL_GENERATION_FAILED", "EXECUTION_FAILED",
+        "SQL_REJECTED", "SQL_GENERATION_FAILED", "EXECUTION_TIMEOUT", "EXECUTION_FAILED",
     }
+
+
+def test_execution_timeout_maps_to_contract_query_timeout(monkeypatch, tmp_path):
+    """P1-04 收尾：EXECUTION_TIMEOUT 映射为契约 §4.2 的 QUERY_TIMEOUT(504)，而非 500 兜底。"""
+    from api.errors import ErrorCode
+    from api.services import DataQueryService
+
+    code, status = DataQueryService._ENGINE_ERROR_CODES["EXECUTION_TIMEOUT"]
+    assert code is ErrorCode.QUERY_TIMEOUT
+    assert status == 504
 
 
 def test_query_page_truncates_before_convert(monkeypatch, tmp_path):
@@ -285,6 +297,27 @@ def test_v1_query_maps_service_error(v1_client):
     assert response.status_code == 422
     body = response.json()
     assert body["code"] == "SQL_REJECTED"
+    assert body["data"] is None
+    assert body["request_id"].startswith("req_")
+
+
+def test_v1_query_returns_504_envelope_for_execution_timeout(v1_client):
+    """P1-04 收尾：执行超时端到端返回契约承诺的 504/QUERY_TIMEOUT 信封（此前为 500/QUERY_FAILED）。"""
+    from api.errors import APIError, ErrorCode
+    from api.main import get_query_service
+    from tests.conftest import FakeQueryService
+
+    class TimeoutService(FakeQueryService):
+        def query_page(self, *args, **kwargs):
+            # services 层 _map_engine_error 对 EXECUTION_TIMEOUT 的产出（message 为固定模板，无敏感内容）
+            raise APIError(ErrorCode.QUERY_TIMEOUT, 504, "SQL 执行超过 10.0s，已被中断")
+
+    v1_client.app.dependency_overrides[get_query_service] = lambda: TimeoutService()
+    response = v1_client.post("/api/v1/query", json={"question": "慢查询"})
+
+    assert response.status_code == 504
+    body = response.json()
+    assert body["code"] == "QUERY_TIMEOUT"
     assert body["data"] is None
     assert body["request_id"].startswith("req_")
 

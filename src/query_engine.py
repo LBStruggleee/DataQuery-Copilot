@@ -89,7 +89,7 @@ class QueryEngine:
                 "execution_time": 0.23,
                 "valid": True,
                 "error": None,
-                "error_code": None,  # 失败时为 SQL_GENERATION_FAILED/SQL_REJECTED/EXECUTION_FAILED
+                "error_code": None,  # 失败时为 SQL_GENERATION_FAILED/SQL_REJECTED/EXECUTION_FAILED/EXECUTION_TIMEOUT
                 "retries": 0,
                 "from_cache": False,
             }
@@ -158,6 +158,15 @@ class QueryEngine:
                 df = self.loader.execute_query(sql, allowed_tables=(self.table_name,))
                 result["execution_time"] = round(time.time() - start_time, 3)
                 break  # 执行成功，跳出重试循环
+            except TimeoutError as e:
+                # P1-04 收尾：执行超时（data_loader query_timeout 经 progress handler 中断）
+                # 不可由 LLM 修正恢复，且每轮已耗满 query_timeout 预算——不再重试，
+                # 立即返回结构化错误码，由 API 层映射为契约 §4.2 的 QUERY_TIMEOUT(504)
+                result["execution_time"] = round(time.time() - start_time, 3)
+                result["error"] = str(e)
+                result["error_code"] = "EXECUTION_TIMEOUT"
+                self._log_query(result)
+                return result
             except Exception as e:
                 result["execution_time"] = round(time.time() - start_time, 3)
                 failure_history.append({"sql": sql, "error": str(e)})

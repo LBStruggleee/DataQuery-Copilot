@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### 2026-10-12 · 收尾修复第1轮（fix(assessment)）
+
+#### 修复
+
+- **P1-04 收尾（QUERY_TIMEOUT 契约落地）**：契约 §4.2 承诺的 `QUERY_TIMEOUT | 504` 此前全仓库无一处实现——SQL 执行超时（`data_loader` 的 `query_timeout` 进度回调中断）落入通用失败路径，对客户端表现为 500/QUERY_FAILED。现 `src/query_engine.py` 的 `ask()` 单独捕获执行阶段 `TimeoutError`，立即返回结构化 `error_code: EXECUTION_TIMEOUT`（不进入 LLM 修正重试：超时每轮已耗满 `query_timeout` 预算，修正调用无法恢复且重试只会倍增延迟）；`api/services.py` 映射表新增 `EXECUTION_TIMEOUT → QUERY_TIMEOUT(504)`。同时声明既有映射决策：**LLM 调用超时映射为 503/SERVICE_UNAVAILABLE**（LLM 属外部依赖，超时归入依赖不可用语义，契约 §4.2 的 QUERY_TIMEOUT 场景限定为 SQL 执行超时）——该决策自 LLM 超时实现批次起生效，本批补记。
+- **P1-17 收尾（前端测试与依赖审计进 CI）**：`.github/workflows/ci.yml` 新增三个作业——`frontend-test`（`npm test` = vitest 单测，阻塞门禁；此前前端测试只存在于本地）、`frontend-e2e`（`bash scripts/e2e_up.sh` 真实链路 Playwright：准备隔离库 → 签发测试 Key → 拉起后端 8001/前端 5173 跑全部用例，阻塞门禁）、`deps-audit`（`pip-audit -r requirements.txt -r requirements-dev.txt` + `npm audit --omit=dev`，阻塞门禁）；lint 作业追加非阻塞 mypy 类型检查步骤（`requirements-dev.txt` 新增 `mypy`，`pyproject.toml` 新增 `[tool.mypy]` 首次接入配置——存量 11 处标注问题先暴露不挡合流）。
+- **pytest 升级至 >=9.0.3**：`pip-audit` 实测 `pytest 8.4.2` 存在 PYSEC-2026-1845（修复版本 9.0.3），`requirements-dev.txt` 与 `pyproject.toml` 的 dev 依赖同步收紧为 `pytest>=9.0.3,<10.0.0`；全量后端测试在 pytest 9.1.1 下 249 passed 实测通过。升级后 `pip-audit` 与 `npm audit --omit=dev` 均 0 漏洞，故 deps-audit 作业设为阻塞门禁。
+- **README CI 检查描述同步**：补齐前端 vitest 单测、Playwright e2e 真实链路与依赖安全审计的表述。
+
+#### 新增
+
+- 测试：`tests/test_query_engine.py` 新增 `test_ask_error_code_execution_timeout_no_retry`（EXECUTION_TIMEOUT、不重试、不触发 LLM 修正）；`tests/test_api_v1.py` 新增执行超时映射参数用例、`test_execution_timeout_maps_to_contract_query_timeout`（映射表落点 QUERY_TIMEOUT(504)）、`test_v1_query_returns_504_envelope_for_execution_timeout`（端到端 504 信封），并更新 error_code 接线全集断言。全量 `python -m pytest tests/ -q` 实测 249 passed；`npx vitest run` 实测 24 passed；`bash scripts/e2e_up.sh` 实测 14 passed。
+
 ### 2026-10-12 · 文档同步批次（fix(assessment)）
 
 #### 修复
