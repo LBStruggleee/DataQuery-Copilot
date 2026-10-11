@@ -4,9 +4,9 @@
 
 **Goal:** 把 DataQuery-Copilot 从演示级推到可内测的成品：鉴权 + 数据管道 + 去脚手架 + 验证 + 上线就绪。
 
-**Architecture:** 后端加 `api/auth.py`（Key 校验/配额/限流）与数据集注册表（SQLite 元信息表），所有 `/api/*` 强制鉴权；前端加 Key 配置 + 数据集下拉 + 上传入口；E2E/负载本地可跑；收尾做镜像加固与上线清单。
+**Architecture:** 后端加 `api/auth.py`（Key 校验/配额/限流）与数据集注册表（SQLite 元信息表），所有 `/api/*` 强制鉴权（后续 P0-01 另行新增免鉴权探针 `/api/health`，仅回报进程与库文件状态）；前端加 Key 配置 + 数据集下拉 + 上传入口；E2E/负载本地可跑；收尾做镜像加固与上线清单。
 
-**Tech Stack:** Python ≥3.10, FastAPI + Pydantic 2.x, SQLite（Key/配额/数据集元信息与业务库同库）, pytest + TestClient；React 19 + TS，vitest（已有），Playwright + k6（阶段四新增）。
+**Tech Stack:** Python ≥3.10, FastAPI + Pydantic 2.x, SQLite（Key/配额/数据集元信息与业务库同库）, pytest + TestClient；React 19 + TS，vitest（已有），Playwright（阶段四新增）+ Python soak 压测。
 
 **Spec:** 本计划即 spec。输入决策：鉴权 = API Key（无登录体系）；多表 = 多数据集并存 + 下拉切换；部署目标 = 暂不上线（阶段五只做到随时可上）。基础契约见 `docs/v1_contract_proposal.md`。
 
@@ -44,7 +44,7 @@
 - Modify: `frontend/src/apiV1/types.ts` + `client.ts` —— 附 `X-API-Key` 请求头。
 - Modify: `frontend/src/App.tsx`、`Sidebar.tsx` —— Key 配置入口 + 数据集下拉 + 上传入口。
 - Delete（阶段三）: `api/main.py` 内 v0 四路由、`frontend/src/contractV1/`、`?contract`/`?mock` 开关、演示快照默认页。
-- Create（阶段四）: `frontend/e2e/`（Playwright）、`load/query_soak.js`（k6，只打无 LLM 成本端点）。
+- Create（阶段四）: `frontend/e2e/`（Playwright）、`load/soak.py`（Python soak，只打无 LLM 成本端点）。
 - Modify（阶段五）: `Dockerfile.api`（非 root + healthcheck）、`.github/workflows/ci.yml`（密钥 grep 门禁）、`docs/production_checklist.md`（上线清单）。
 
 ---
@@ -112,13 +112,13 @@
 ### Phase 4: E2E + 负载（本地可跑）
 
 **Files:**
-- Create: `frontend/e2e/`（Playwright 用例 + `playwright.config.ts`）、`load/query_soak.js`（k6）、`load/README.md`（全量 LLM 压测手动步骤，因烧配额不自动化）
+- Create: `frontend/e2e/`（Playwright 用例 + `playwright.config.ts`）、`load/soak.py`（Python soak 压测，不引 k6）、`load/README.md`（全量 LLM 压测手动步骤，因烧配额不自动化）
 - Modify: `frontend/package.json`（`test:e2e` 脚本）、 Playwright 为 devDependency
 
-- [ ] **Step 1: E2E 基座**——Playwright 安装；fixture：测试 Key（调 `manage_keys.py`）、前后端本地启动脚本（`scripts/e2e_up.sh`  feelings：只写 Windows 可跑的 `scripts/e2e_up.ps1`，本仓库主力环境是 Windows）。
+- [ ] **Step 1: E2E 基座**——Playwright 安装；fixture：测试 Key（调 `manage_keys.py`）、前后端本地启动脚本（已交付双版本：`scripts/e2e_up.sh`（bash，Linux/macOS/Git Bash，P1-15 补齐）与 `scripts/e2e_up.ps1`（Windows））。
 - [ ] **Step 2: 用例**——无 Key 访问 401；填 Key 后提问出结果；翻页；触发 `SQL_REJECTED` 错误码展示；上传数据集并切换（Phase 2 已交付前提下）。
-- [ ] **Step 3: k6**——只打无 LLM 成本端点（health/schema/quality + 非法问题 422）：虚拟用户爬坡，输出延迟 p95 与失败率；全量 LLM soak 写手动步骤文档。
-- [ ] **Acceptance:** `npm run test:e2e` 全绿；k6 报告给出并发上限与慢查询清单。
+- [ ] **Step 3: 压测**——只打无 LLM 成本端点（health/schema/quality + 非法问题 422）：`load/soak.py` 并发压测，输出延迟 p95 与失败率；全量 LLM soak 写手动步骤文档。
+- [ ] **Acceptance:** `npm run test:e2e` 全绿；soak 报告给出并发上限与慢查询清单。
 - [ ] **Commit:** `test: e2e and load harnesses`
 
 ---
@@ -131,7 +131,7 @@
 - Create: `docs/production_checklist.md`（域名/备份/告警占位/`ADMIN` Key 轮换步骤，1 小时上线目标）
 - Modify: 日志 JSON 化 + `GET /api/v1/metrics`（请求计数/LLM 调用计数/错误计数，纯 JSON，不引入新依赖）
 
-- [ ] **Step 1: 镜像加固**——非 root 运行、healthcheck 指向 `/api/v1/health`；本地 `docker build` + `docker run`冒烟（health 200）。
+- [ ] **Step 1: 镜像加固**——非 root 运行、healthcheck 指向免鉴权探针 `/api/health`（`/api/v1/health` 需 Key，容器探针会拿 401）；本地 `docker build` + `docker run`冒烟（health 200）。
 - [ ] **Step 2: 密钥门禁**——CI grep 步骤；全仓库扫一遍确认无密钥（`git log -S` 抽查历史）。
 - [ ] **Step 3: 可观测最小集**——JSON 日志（含 request_id）、metrics 端点、uptime 监控占位（文档写用哪个免费服务）。
 - [ ] **Step 4: 清单**——`production_checklist.md` 按"上线前/上线中/上线后"三段写，每步可执行命令。
@@ -143,6 +143,6 @@
 ## Self-Review
 
 1. **Spec coverage:** API Key→Phase 1；多数据集下拉→Phase 2（含上传/切换/备份）；去脚手架→Phase 3；E2E/负载→Phase 4；暂不上线→Phase 5 只做就绪。输入决策全覆盖。
-2. **Placeholder scan:** 无 TBD/TODO；每步有文件/接口/测试/验收；`e2e_up` 脚本明确 Windows ps1（本机主力环境）。
+2. **Placeholder scan:** 无 TBD/TODO；每步有文件/接口/测试/验收；`e2e_up` 脚本提供 bash 与 PowerShell 双版本（`scripts/e2e_up.sh` / `scripts/e2e_up.ps1`）。
 3. **Type consistency:** `require_api_key -> str`（key_hash）Phase 1 定义、路由消费一致；`resolve_table -> str` Phase 2 定义、services 消费一致；错误码新增两处同步（后端 errors.py + 前端 types.ts）。
 4. **Review Focus:** 五条各有归属（Key 日志→P1 测试；配额跨日→P1；穿越→P2；多 worker→P1 注释+P5 清单；密钥门禁→P5 CI）。

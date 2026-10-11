@@ -90,6 +90,11 @@ dataquery-copilot/
 
 ## 5. 首版 API 契约
 
+> 现状说明：以下为首版（v0）设计稿，v0 路由已随 v1 契约落地而下线。
+> 现行接口为 `/api/v1/health`、`/api/v1/schema`、`/api/v1/quality`、`/api/v1/query`、
+> `/api/v1/datasets`、`/api/v1/metrics`，除免鉴权探针 `GET /api/health` 外均需 `X-API-Key`；
+> 查询响应新增分页字段（page / page_size / total_pages / truncated），`from_cache` 恒为 `false`。
+
 | 接口 | 方法 | 作用 |
 |---|---|---|
 | `/api/health` | GET | 返回 API、数据库和 LLM 配置状态 |

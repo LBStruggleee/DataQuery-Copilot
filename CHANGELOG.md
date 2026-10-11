@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### 2026-10-12 · 文档同步批次（fix(assessment)）
+
+#### 修复
+
+- **P1-12**：README 用例数 66 → 245（`python -m pytest tests/ --collect-only -q` 末行实测 245 collected，全量运行 245 passed）；tests/ 目录树由 3 个文件补齐为 14 个 test_*.py + conftest.py；项目结构树同步补齐 api/（auth、datasets、errors、logjson、metrics、request_context）、scripts/（manage_keys、backup_db、e2e_up.sh、e2e_up.ps1）与 load/（soak 压测脚本）。
+- **README 缓存承诺**：「查询缓存」章节保持既有准确表述（核心库默认开启，HTTP API `/api/v1/query` 固定 `enable_cache=False`，`from_cache` 恒为 `false`）；`docs/technical_doc.md` 的「无缓存机制」过时表述改为现状（核心库已内置内存 LRU 缓存，API 路径固定关闭，多 worker 不共享）。
+- **README 清洗可选开关**：新增「结果清洗开关」小节——核心库 `ask(clean_result=False)` 与 HTTP API 请求体 `"clean_result": false` 均可关闭默认开启的结果清洗（对应 `src/query_engine.py:62`、`api/models.py:50`）。
+- **README .xls 移除**：数据接入与数据集上传表述改为 CSV / Excel(.xlsx)（对应 `api/datasets.py` `_ALLOWED_EXTS`，P2-20 移除 .xls）。
+- **README /api/health 免鉴权探针**：「访问控制」不再声称「所有 `/api/*` 接口要求 `X-API-Key`」，改为除免鉴权存活探针 `GET /api/health`（P0-01）外均需 Key。
+- **README LLM 超时**：新增「LLM 超时」小节——默认 30 秒，`LLM_TIMEOUT_SECONDS` 可覆盖（对应 `src/llm_client.py:23-24`）；`docs/deployment.md` 环境变量表同步新增该变量。
+- **README 上传配额与数量上限**：补充「查询与上传均计入当日配额（默认 200 次/天，成功后记账）」「数据集数量上限 50 个，超出 429」（对应 `api/main.py:355-366`、`api/datasets.py:22`）。
+- **README CI 检查**：由「API/可视化 smoke test + React 构建」更新为现状——全量后端测试（`pytest tests/ -q`，P1-13）、非阻塞 ruff lint（P1-17）、前端生产构建、密钥清扫。
+- **docs/e2e 启动方式**：`docs/production_plan.md` 中「只写 Windows 可跑的 `scripts/e2e_up.ps1`」的表述（含一处错字）改为 bash 版 `scripts/e2e_up.sh`（P1-15 交付）与 PowerShell 版双入口；Self-Review 段同步更正；Phase 4/5 的 `load/query_soak.js`（k6）、healthcheck 指向 `/api/v1/health`、技术栈含 k6 等过时表述改为现状（`load/soak.py`、免鉴权 `/api/health`）。
+- **docs/frontend_showcase_plan.md**：「首版 API 契约」章节补充现状说明——v0 路由已下线，现行接口为 `/api/v1/*`（除免鉴权探针 `GET /api/health` 外均需 `X-API-Key`），查询响应含分页字段且 `from_cache` 恒为 `false`。
+- **docs/v1_contract_proposal.md**：验收标准中「现有 66 个后端用例」同步为 245。
+- **docs/technical_doc.md** 其余过时表述：安全校验补充多语句拒绝与表白名单兜底（P1-09/P2-32）；LLM 客户端补 SDK 内建重试；数据接入层补 `execute_query` 资源边界（行数上限 / 执行超时 / 表白名单）；「后续优化方向」勾选已交付项（查询缓存、SQL 自动重试、批量查询 CLI、Web 界面）。
+
+#### 说明
+
+- 本批为纯文档变更，未改动任何代码，按仓库纪律免测试更新；测试数字以 `python -m pytest tests/ --collect-only -q` 实测为准。
+
 ### 2026-10-12 · 部署与仓库卫生批次（fix(assessment)）
 
 #### 修复

@@ -14,7 +14,7 @@ DataQuery Copilot 是一个基于 LLM 的数据查询自动化工具，用户用
 2. 生成对应的 SQL 查询语句
 3. 安全校验（防注入/防误操作）
 4. 自动执行查询
-5. 数据清洗
+5. 数据清洗（可选，`clean_result` 默认开启，可关闭）
 6. 结果可视化
 
 ### 1.3 核心指标
@@ -70,10 +70,11 @@ DataQuery Copilot 是一个基于 LLM 的数据查询自动化工具，用户用
 **职责**：将外部数据文件导入 SQLite，提供统一的查询接口。
 
 **设计要点**：
-- 支持 CSV 和 Excel 两种格式
+- 支持 CSV 和 Excel(.xlsx) 两种格式（.xls 因解析依赖 xlrd 未声明已移除）
 - 自动推断数据类型（日期、数值、字符串）
 - `get_schema_text()` 方法将表结构格式化为文本，直接嵌入 LLM Prompt
 - 使用 SQLite 的 WAL 模式提升并发性能
+- `execute_query` 自带资源边界：行数上限（默认 10000）、执行超时（默认 10s）、表白名单（`set_authorizer`，仅允许 SELECT 当前数据集表）
 
 **关键技术决策**：
 - 为什么选 SQLite？轻量、嵌入式、无需额外服务、适合工具型应用
@@ -89,6 +90,10 @@ DataQuery Copilot 是一个基于 LLM 的数据查询自动化工具，用户用
 - 输出格式约束：要求用 ```sql 代码块包裹
 - 安全约束：只允许 SELECT，禁止修改数据
 
+**调用参数**：
+- 单次调用超时默认 30 秒，环境变量 `LLM_TIMEOUT_SECONDS` 可覆盖（非法取值在构造客户端时报错）
+- SDK 内建重试：连接错误 / 408 / 429 / 5xx 指数退避自动重试 2 次
+
 **SQL 提取**：
 - 支持从代码块中提取
 - 支持纯文本提取
@@ -97,14 +102,20 @@ DataQuery Copilot 是一个基于 LLM 的数据查询自动化工具，用户用
 **安全校验**：
 - 关键词黑名单：INSERT/UPDATE/DELETE/DROP 等
 - 必须以 SELECT 或 WITH 开头
-- 双重保险：Prompt 约束 + 代码校验
+- 显式拒绝多语句；字符串字面量与注释先剥离再匹配，避免误判
+- 双重保险：Prompt 约束 + 代码校验；执行前另有表白名单兜底（见 3.1）
 
 ### 3.3 智能查询引擎 (query_engine.py)
 
 **职责**：核心调度器，串联所有模块。
 
+**性能设计**：
+- 查询缓存：核心库 `QueryEngine` 默认开启（单进程内存 LRU，`cache_stats()` / `clear_cache()`）；
+  HTTP API 路径固定 `enable_cache=False`，避免跨请求返回陈旧结果
+- SQL 自动重试：执行失败把错误回传 LLM 修正，默认最多 2 次
+
 **核心方法 `ask()`**：
-1. 获取表结构 → 2. LLM 生成 SQL → 3. 安全校验 → 4. 执行查询 → 5. 清洗结果 → 6. 返回
+1. 获取表结构 → 2. LLM 生成 SQL → 3. 安全校验 → 4. 执行查询 → 5. 清洗结果（`clean_result=False` 可跳过）→ 6. 返回
 
 **容错设计**：
 - 每个步骤都有 try-catch
@@ -185,15 +196,15 @@ CSV/Excel → pandas.read_csv → 类型推断 → SQLite.to_sql → 表结构�
 2. **不支持事务操作**：安全考虑，只允许 SELECT
 3. **数据量限制**：SQLite 适合中小规模数据（百万级以内），大数据量需迁移到 MySQL/PostgreSQL
 4. **Prompt 依赖**：SQL 生成质量依赖 Prompt 设计，不同模型表现可能不同
-5. **无缓存机制**：相同问题会重复调用 API，可加查询缓存优化
+5. **缓存为单进程内存 LRU**：核心库 `QueryEngine` 已内置查询缓存（HTTP API 路径固定关闭）；多 worker/多实例部署时缓存不共享
 
 ---
 
 ## 7. 后续优化方向
 
 - [ ] 多表关联查询支持（通过 schema 扩展）
-- [ ] 查询结果缓存（减少 API 调用）
-- [ ] SQL 自动重试机制（生成失败时自动修正）
-- [ ] 批量查询 CLI（支持文件输入）
-- [ ] Web 界面（Flask/Streamlit）
+- [x] 查询结果缓存（核心库 `QueryEngine` 内存 LRU，HTTP API 路径固定关闭）
+- [x] SQL 自动重试机制（执行失败回传错误让 LLM 修正，最多 2 次）
+- [x] 批量查询 CLI（`python -m src.cli batch questions.txt`）
+- [x] Web 界面（实际以 FastAPI + React 工作台交付）
 - [ ] 支持更多数据库（MySQL/PostgreSQL）

@@ -62,7 +62,7 @@ npm run dev
 
 | 模块 | 文件 | 说明 |
 |------|------|------|
-| 数据接入层 | `src/data_loader.py` | CSV/Excel 导入 SQLite，自动类型推断 |
+| 数据接入层 | `src/data_loader.py` | CSV / Excel(.xlsx) 导入 SQLite，自动类型推断 |
 | 数据清洗 | `src/data_cleaner.py` | 缺失值处理、异常值检测、格式标准化 |
 | 智能查询 | `src/query_engine.py` | 自然语言 → SQL → 执行 → 返回 |
 | LLM 封装 | `src/llm_client.py` | DeepSeek API 调用 + Prompt 工程 |
@@ -85,9 +85,15 @@ npm run dev
 ```
 dataquery-copilot/
 ├── api/
-│   ├── main.py             # FastAPI HTTP 入口
+│   ├── main.py             # FastAPI HTTP 入口（路由 + 免鉴权健康探针）
 │   ├── models.py           # API 响应模型
-│   └── services.py         # 现有核心模块的 HTTP 适配层
+│   ├── services.py         # 现有核心模块的 HTTP 适配层
+│   ├── auth.py             # API Key 鉴权 / 限流 / 日配额
+│   ├── datasets.py         # 数据集上传入库与多数据集作用域
+│   ├── errors.py           # 统一错误码
+│   ├── logjson.py          # 结构化 JSON 日志格式
+│   ├── metrics.py          # 内存态请求指标（/api/v1/metrics）
+│   └── request_context.py  # request_id 中间件
 ├── src/
 │   ├── __init__.py
 │   ├── data_loader.py     # 数据接入层
@@ -98,19 +104,36 @@ dataquery-copilot/
 │   └── cli.py             # 命令行（交互式 + 单次 + 批量）
 ├── scripts/
 │   ├── generate_sample_data.py
-│   └── prepare_demo_db.py
+│   ├── prepare_demo_db.py
+│   ├── manage_keys.py      # API Key 签发 / 列表 / 吊销
+│   ├── backup_db.py        # SQLite 在线备份（含 WAL，可轮换保留）
+│   ├── e2e_up.sh           # E2E 一键入口（bash，Linux/macOS/Git Bash）
+│   └── e2e_up.ps1          # E2E 一键入口（Windows PowerShell）
 ├── frontend/               # React + TypeScript 工作台
 │   ├── src/
 │   ├── .env.example        # 前端 API 地址配置示例
 │   └── package.json
 ├── Dockerfile.api          # API 生产镜像
 ├── render.yaml             # Render 前后端 Blueprint
-├── .github/workflows/      # CI 构建与 smoke test
-├── tests/                 # 单元测试（pytest，66 个用例）
+├── .github/workflows/      # CI：全量后端测试 / lint / 前端构建 / 密钥清扫
+├── load/                  # 负载压测脚本（load/soak.py）与说明（load/README.md）
+├── tests/                 # 单元测试（pytest，245 个用例）
+│   ├── __init__.py
 │   ├── conftest.py
-│   ├── test_data_loader.py
+│   ├── test_api.py
+│   ├── test_api_auth.py
+│   ├── test_api_v1.py
+│   ├── test_backup_db.py
+│   ├── test_cli.py
 │   ├── test_data_cleaner.py
-│   └── test_llm_client.py
+│   ├── test_data_loader.py
+│   ├── test_datasets.py
+│   ├── test_llm_client.py
+│   ├── test_logjson.py
+│   ├── test_ops_health.py
+│   ├── test_query_engine.py
+│   ├── test_soak.py
+│   └── test_visualizer.py
 ├── data/                  # 数据文件
 ├── output/                # 输出图表 + 批量报告
 ├── logs/                  # 查询日志（JSONL）
@@ -134,7 +157,7 @@ dataquery-copilot/
 - [x] 可视化输出
 - [x] SQL 安全校验增强（词边界匹配 + 字符串/注释过滤）
 - [x] 批量查询 CLI（从文件读取 + 汇总报告）
-- [x] 单元测试（pytest，66 个测试用例）
+- [x] 单元测试（pytest，245 个测试用例）
 - [x] 性能优化（查询缓存 + SQL 自动重试 + 查询日志）
 - [x] React 工作台 v0 与核心交互
 - [x] 深浅主题、响应式和键盘交互
@@ -159,6 +182,13 @@ CLI / 核心库直接调用时，每次查询自动记录到 `logs/query_log.jso
 HTTP API 查询路径默认关闭该逐条日志（`enable_log=False`）：用户问题与生成的 SQL 属潜在敏感业务信息，不落盘；
 服务端仅保留结构化运行日志（不含问题/SQL 原文）。
 
+### 结果清洗开关
+查询结果的清洗默认开启（auto 填充缺失值 + 格式标准化），可按需关闭：
+核心库 `engine.ask(question, clean_result=False)`；HTTP API 请求体传 `"clean_result": false`。
+
+### LLM 超时
+单次 LLM 调用超时默认 30 秒，环境变量 `LLM_TIMEOUT_SECONDS` 可覆盖（非法取值在构造 LLM 客户端时直接报错，见 `src/llm_client.py`）。
+
 ### 批量查询
 ```bash
 # 创建问题文件（每行一个问题，# 开头为注释）
@@ -171,6 +201,7 @@ python -m pytest tests/ -v   # 后端测试
 ```
 
 ### 访问控制（API Key）
+除免鉴权存活探针 `GET /api/health`（只回报进程与库文件状态，供部署平台/容器健康检查使用）外，
 所有 `/api/*` 接口要求 `X-API-Key` 请求头。签发与吊销在服务器上执行：
 ```bash
 python scripts/manage_keys.py create --name <用途> [--quota 200]  # 明文只显示一次
@@ -179,9 +210,11 @@ python scripts/manage_keys.py revoke <明文Key>
 ```
 前端在左侧栏底部「访问密钥」处填入 Key（存浏览器本地）。无 Key 调接口返回 401 `AUTH_REQUIRED`，
 超频/配额耗尽返回 429 `RATE_LIMITED`。限流为单进程内存实现（默认单 worker 足够）。
+查询与上传均计入 Key 的当日配额（默认 200 次/天，`manage_keys.py create --quota` 可调），成功后才记账。
 
 ### 数据集与备份
-- 前端左侧栏可下拉切换数据集，上传 CSV/Excel（≤50MB）后自动入库并出现在列表中。
+- 前端左侧栏可下拉切换数据集，上传 CSV / Excel(.xlsx)（≤50MB，.xls 已不再支持）后自动入库并出现在列表中；
+  上传计入当日配额，数据集数量上限 50 个，超出返回 429。
 - 备份与恢复演练：
 ```bash
 python scripts/backup_db.py --db data/query.db --dir backups --keep 7
@@ -191,4 +224,4 @@ python -c "import sqlite3; print(sqlite3.connect('/tmp/restored.db').execute('SE
 
 ### CI 检查
 
-GitHub Actions 会分别执行 API/可视化 smoke test 和 React 生产构建，配置文件为 `.github/workflows/ci.yml`。
+GitHub Actions 会执行全量后端测试（`pytest tests/ -q`）、非阻塞 ruff lint、React 生产构建与密钥清扫，配置文件为 `.github/workflows/ci.yml`。

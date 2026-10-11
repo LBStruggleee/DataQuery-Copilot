@@ -59,6 +59,7 @@ npm run dev
 |---|---|---|
 | API | `DEEPSEEK_API_KEY` | 必填，不能提交到 Git |
 | API | `MODEL_NAME` | 默认 `deepseek-chat` |
+| API | `LLM_TIMEOUT_SECONDS` | 单次 LLM 调用超时秒数，默认 `30`（非法取值在构造 LLM 客户端时直接报错） |
 | API | `DB_PATH` | 默认 `data/query.db`；Render Blueprint 指向挂载点 `/var/data/query.db` |
 | API | `TABLE_NAME` | 默认 `orders` |
 | API | `CORS_ORIGINS` | 允许访问 API 的前端地址 |
