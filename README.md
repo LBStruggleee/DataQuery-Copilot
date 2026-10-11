@@ -147,14 +147,17 @@ SQL 执行失败时，自动把错误信息回传给 LLM 让它修正 SQL，最�
 无需人工介入，系统自动从错误中恢复。
 
 ### 查询缓存
-相同问题不重复调用 API，省成本 + 提速。
+相同问题不重复调用 LLM API，省成本 + 提速。缓存作用于核心库 `QueryEngine`（CLI / 直接调用场景）；
+HTTP API（`/api/v1/query`）为避免跨请求返回陈旧结果，固定 `enable_cache=False`：响应中 `from_cache` 恒为 `false`。
 ```python
 engine.cache_stats()   # 查看缓存统计
 engine.clear_cache()   # 清空缓存
 ```
 
 ### 查询日志
-每次查询自动记录到 `logs/query_log.jsonl`，包含时间、问题、SQL、结果、耗时、错误信息，可追溯。
+CLI / 核心库直接调用时，每次查询自动记录到 `logs/query_log.jsonl`，包含时间、问题、SQL、结果、耗时、错误信息，可追溯。
+HTTP API 查询路径默认关闭该逐条日志（`enable_log=False`）：用户问题与生成的 SQL 属潜在敏感业务信息，不落盘；
+服务端仅保留结构化运行日志（不含问题/SQL 原文）。
 
 ### 批量查询
 ```bash

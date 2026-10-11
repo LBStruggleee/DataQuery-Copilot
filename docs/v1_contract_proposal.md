@@ -81,6 +81,7 @@ DataQuery-Copilot 已打通「自然语言 → SQL → 执行 → 清洗 → 可
 | `QUERY_TIMEOUT` | 504 | 执行超时 |
 | `RESULT_TRUNCATED` | 200 | 成功但结果被截断（`data.truncated = true`，属警告而非失败） |
 | `SERVICE_UNAVAILABLE` | 503 | LLM 未配置 / DB 未就绪等依赖缺失 |
+| `UPLOAD_REJECTED` | 422 | 上传文件未通过校验（非法文件名 / 扩展名不支持 / 超过 50MB / 内容解析失败） |
 
 映射规则集中放在路由层，服务层只抛领域异常，不直接写 HTTP 状态。
 

@@ -73,3 +73,15 @@ def engine(temp_db_path, sample_df):
 @pytest.fixture
 def cleaner():
     return DataCleaner()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_api_memory_state():
+    """API 层进程内存态（Key 限流桶 / 鉴权失败桶）逐用例清空，避免用例顺序耦合。"""
+    import api.auth as auth_module
+
+    auth_module._hits.clear()
+    auth_module._auth_failures.clear()
+    yield
+    auth_module._hits.clear()
+    auth_module._auth_failures.clear()

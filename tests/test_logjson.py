@@ -26,3 +26,16 @@ def test_json_formatter_without_extras():
 
     assert payload["message"] == "plain"
     assert "request_id" not in payload
+
+
+def test_json_formatter_emits_client_ip_for_auth_audit():
+    """P2-27：鉴权失败审计日志的 client_ip 需要进入 JSON 输出。"""
+    from api.logjson import JsonFormatter
+
+    record = logging.LogRecord("api.auth", logging.WARNING, __file__, 10, "auth failure audit", (), None)
+    record.request_id = "req_abc"
+    record.client_ip = "203.0.113.7"
+    payload = json.loads(JsonFormatter().format(record))
+
+    assert payload["client_ip"] == "203.0.113.7"
+    assert payload["request_id"] == "req_abc"

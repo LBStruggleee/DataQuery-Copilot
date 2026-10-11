@@ -47,9 +47,10 @@ class DataQueryService:
     def quality(self, table_name: str | None = None) -> dict:
         table = table_name or self.table_name
         with DataLoader(self.db_path) as loader:
+            # P2-25：质量统计基于前 10000 行采样，sampled_rows 显式标注实际扫描行数
             df = loader.execute_query(f'SELECT * FROM "{table}" LIMIT 10000')
         report = DataCleaner().quality_report(df)
-        return {"table_name": table, **report}
+        return {"table_name": table, "sampled_rows": int(len(df)), **report}
 
     def _database_ready(self) -> bool:
         if not Path(self.db_path).is_file():
@@ -67,11 +68,13 @@ class DataQueryService:
             db_path=self.db_path,
             table_name=table,
             enable_cache=False,
+            enable_log=False,  # P2-34：API 路径不把用户问题/生成的 SQL 明文写入 logs/query_log.jsonl
         ) as engine:
             result = engine.ask(question, clean_result=clean_result, max_retries=max_retries)
 
         if result["error"]:
-            raise self._map_engine_error(result["error"])
+            # P2-26：优先按 engine result 的结构化 error_code 映射，字符串匹配仅作旧结果回退
+            raise self._map_engine_error(result.get("error_code"), result["error"])
 
         df = result["data"]
         total = len(df) if df is not None else 0
@@ -99,8 +102,26 @@ class DataQueryService:
             "from_cache": result["from_cache"],
         }
 
-    @staticmethod
-    def _map_engine_error(error: str) -> APIError:
+    # P2-26：src 层 engine result.error_code → API 契约错误码的结构化映射表
+    _ENGINE_ERROR_CODES: dict[str, tuple[ErrorCode, int]] = {
+        "SQL_REJECTED": (ErrorCode.SQL_REJECTED, 422),
+        "SQL_GENERATION_FAILED": (ErrorCode.SERVICE_UNAVAILABLE, 503),
+        "EXECUTION_FAILED": (ErrorCode.QUERY_FAILED, 500),
+    }
+
+    @classmethod
+    def _map_engine_error(cls, error_code: str | None, error: str) -> APIError:
+        """engine result.error → APIError。
+
+        P2-26：优先按 src 层结构化 error_code 映射（src 改措辞不再静默漂移为 500）；
+        engine result 未携带 error_code（旧版本）时回退到历史字符串匹配。
+        EXECUTION_FAILED 中明确的 no such table 仍细化为 TABLE_NOT_FOUND(404)，与既有契约一致。
+        """
+        if error_code:
+            code, status = cls._ENGINE_ERROR_CODES.get(error_code, (ErrorCode.QUERY_FAILED, 500))
+            if code == ErrorCode.QUERY_FAILED and "no such table" in error:
+                return APIError(ErrorCode.TABLE_NOT_FOUND, 404, error)
+            return APIError(code, status, error)
         if "安全校验" in error:
             return APIError(ErrorCode.SQL_REJECTED, 422, error)
         if "no such table" in error:

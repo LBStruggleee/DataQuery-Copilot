@@ -40,6 +40,72 @@ def test_register_rejects_bad_files(tmp_path):
         register_upload(db, "../../etc/passwd.csv", _csv_bytes())
 
 
+def test_register_rejects_legacy_xls(tmp_path):
+    """P2-20：.xls 白名单移除——xlrd 未声明，放行必然 422。"""
+    from api.datasets import register_upload
+    from api.errors import APIError, ErrorCode
+
+    db = str(tmp_path / "t.db")
+    with pytest.raises(APIError) as exc_info:
+        register_upload(db, "legacy.xls", b"\xd0\xcf\x11\xe0")
+    assert exc_info.value.code is ErrorCode.UPLOAD_REJECTED
+
+
+def test_register_upload_gbk_fallback(tmp_path):
+    """P2-21：GBK 编码 CSV 走 utf-8-sig → gbk 回退链；BOM 由 utf-8-sig 剥离。"""
+    from api.datasets import register_upload
+
+    db = str(tmp_path / "t.db")
+    gbk_csv = "类别,金额\n食品,12.5\n图书,9.9\n".encode("gbk")
+    info = register_upload(db, "gbk.csv", gbk_csv)
+    assert info["rows"] == 2
+
+    bom_csv = "类别,金额\n食品,12.5\n".encode("utf-8-sig")
+    info2 = register_upload(str(tmp_path / "bom.db"), "bom.csv", bom_csv)
+    assert info2["rows"] == 1
+
+
+def test_register_rejects_undecodable_csv(tmp_path):
+    """P2-21：两种编码都解不开的内容仍以 UPLOAD_REJECTED 422 拒绝。"""
+    from api.datasets import register_upload
+    from api.errors import APIError, ErrorCode
+
+    garbage = bytes([0xFF, 0xFE, 0x41, 0x00, 0x42]) * 64
+    with pytest.raises(APIError) as exc_info:
+        register_upload(str(tmp_path / "t.db"), "bad.csv", garbage)
+    assert exc_info.value.code is ErrorCode.UPLOAD_REJECTED
+
+
+def test_register_enforces_dataset_count_limit(tmp_path, monkeypatch):
+    """P1-10：数据集数量达上限后上传返回 429。"""
+    import api.datasets as datasets_module
+    from api.datasets import register_upload
+    from api.errors import APIError, ErrorCode
+
+    monkeypatch.setattr(datasets_module, "MAX_DATASETS", 1)
+    db = str(tmp_path / "t.db")
+    register_upload(db, "first.csv", _csv_bytes(3))
+    with pytest.raises(APIError) as exc_info:
+        register_upload(db, "second.csv", _csv_bytes(3))
+    assert exc_info.value.code is ErrorCode.RATE_LIMITED
+    assert exc_info.value.status == 429
+
+
+def test_remove_dataset_rolls_back_registration(tmp_path):
+    """P1-10 竞态回滚助手：删除 datasets 行并 DROP 对应表。"""
+    from api.datasets import list_datasets, register_upload, remove_dataset, resolve_table
+    from api.errors import APIError
+
+    db = str(tmp_path / "t.db")
+    info = register_upload(db, "a.csv", _csv_bytes(3))
+    remove_dataset(db, info["id"], info["table_name"])
+
+    assert list_datasets(db) == []
+    with pytest.raises(APIError) as exc_info:
+        resolve_table(db, info["id"])
+    assert exc_info.value.code.value == "TABLE_NOT_FOUND"
+
+
 def test_register_rejects_oversize(tmp_path, monkeypatch):
     import api.datasets as datasets_module
     from api.datasets import register_upload
@@ -117,6 +183,9 @@ def test_query_page_scoped_table(monkeypatch, tmp_path):
     service = DataQueryService(str(tmp_path / "t.db"))
     service.query_page("q", True, 2, 1, 10, table_name="ds_custom_abc")
     assert seen["table_name"] == "ds_custom_abc"
+    # P2-34：API 查询路径不写查询日志（用户问题/SQL 不落盘）
+    assert seen["enable_log"] is False
+    assert seen["enable_cache"] is False
 
 
 def test_upload_list_and_scoped_query(tmp_path, monkeypatch):

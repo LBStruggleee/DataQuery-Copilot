@@ -23,6 +23,8 @@ class SchemaResponse(BaseModel):
 
 class QualityResponse(BaseModel):
     table_name: str
+    # P2-25：质量统计实际扫描的行数——大表仅采样前 10000 行，用该字段显式标注
+    sampled_rows: int
     total_rows: int
     total_columns: int
     missing_values: dict[str, int]

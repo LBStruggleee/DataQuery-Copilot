@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 
 
 class JsonFormatter(logging.Formatter):
-    """单行 JSON 日志；request_id/code/detail 等 extra 字段 presence-dependent."""
+    """单行 JSON 日志；request_id/code/detail/client_ip 等 extra 字段 presence-dependent."""
 
-    EXTRA_KEYS = ("request_id", "code", "detail")
+    EXTRA_KEYS = ("request_id", "code", "detail", "client_ip")
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {

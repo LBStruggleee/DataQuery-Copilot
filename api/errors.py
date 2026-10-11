@@ -15,6 +15,8 @@ class ErrorCode(str, Enum):
     # 成品化阶段一：鉴权与限流
     AUTH_REQUIRED = "AUTH_REQUIRED"
     RATE_LIMITED = "RATE_LIMITED"
+    # P2-19：上传校验失败专用码（原先复用 INVALID_QUESTION，超出其「问题为空/超长/非法」的契约语义）
+    UPLOAD_REJECTED = "UPLOAD_REJECTED"
 
 
 class APIError(Exception):
