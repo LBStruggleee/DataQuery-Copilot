@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 # P1-10：数据集数量上限（超出返回 429），限制单库表数量与磁盘膨胀
 MAX_DATASETS = 50
+# P1-11：xlsx 单个工作表声明维度估算的单元格数上限（解压炸弹防护）
+MAX_XLSX_CELLS = 2_000_000
 # P2-20：移除 .xls —— 解析所需的 xlrd 未在 requirements.txt/pyproject 中声明，放行必然 422
 _ALLOWED_EXTS = (".csv", ".xlsx")
 
@@ -54,6 +56,35 @@ def _read_csv_fallback(content: bytes) -> pd.DataFrame:
         return pd.read_csv(io.BytesIO(content), encoding="gbk")
 
 
+def _check_xlsx_declared_cells(content: bytes) -> None:
+    """P1-11：解析前用 openpyxl read_only 读取工作表声明的维度估算单元格数。
+
+    xlsx 是 zip 容器，50MB 恶意工作簿可声明数亿单元格（解压炸弹），一次性
+    pd.read_excel 会耗尽内存；超限直接拒绝，不给全量加载的机会。
+    声明维度缺失（max_row/max_column 为 None）时无法估算，跳过该工作表，
+    兜底仍有 50MB 上传大小限制。
+    """
+    from openpyxl import load_workbook
+
+    try:
+        workbook = load_workbook(io.BytesIO(content), read_only=True)
+    except Exception as error:
+        raise APIError(ErrorCode.UPLOAD_REJECTED, 422, f"文件解析失败：{error}") from error
+    try:
+        for worksheet in workbook.worksheets:
+            rows, cols = worksheet.max_row, worksheet.max_column
+            if rows is None or cols is None:
+                continue
+            if rows * cols > MAX_XLSX_CELLS:
+                raise APIError(
+                    ErrorCode.UPLOAD_REJECTED, 422,
+                    f"工作表 {worksheet.title} 声明尺寸过大"
+                    f"（约 {rows}×{cols} 单元格，上限 {MAX_XLSX_CELLS}），拒绝解析",
+                )
+    finally:
+        workbook.close()
+
+
 def register_upload(db_path: str, filename: str, content: bytes) -> dict:
     """校验并入库上传文件，返回数据集信息；非法输入抛 UPLOAD_REJECTED(422)（P2-19）。"""
     init_dataset_tables(db_path)
@@ -76,6 +107,8 @@ def register_upload(db_path: str, filename: str, content: bytes) -> dict:
             f"数据集数量已达上限（{MAX_DATASETS} 个），请先清理旧数据集",
         )
 
+    if ext == ".xlsx":
+        _check_xlsx_declared_cells(content)  # P1-11：解析前先做声明维度上限检查
     try:
         if ext == ".csv":
             df = _read_csv_fallback(content)

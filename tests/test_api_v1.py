@@ -176,19 +176,9 @@ def test_query_page_truncates_before_convert(monkeypatch, tmp_path):
     assert seen == [100]
 
 
-def test_v1_validation_errors_use_envelope(tmp_path, monkeypatch):
+def test_v1_validation_errors_use_envelope(api_test_client):
     """终审 I1：Pydantic 校验失败也必须包信封。"""
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "pytest")
-    app = create_app()
-    app.dependency_overrides[get_query_service] = FakeV1Service
-    with TestClient(app, headers={"X-API-Key": key}) as client:
+    with api_test_client() as client:
         empty = client.post("/api/v1/query", json={"question": ""})
         bad_page = client.post("/api/v1/query", json={"question": "有效问题", "page": 0})
 
@@ -198,23 +188,16 @@ def test_v1_validation_errors_use_envelope(tmp_path, monkeypatch):
     assert bad_page.json()["version"] == "v1"
 
 
-def test_v1_health_wraps_unexpected_errors(tmp_path, monkeypatch):
+def test_v1_health_wraps_unexpected_errors(api_test_client):
     """终审 I2：health_v1 异常也必须包信封。"""
-    from fastapi.testclient import TestClient
+    from tests.conftest import FakeQueryService
 
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    class ExplodingHealthService(FakeV1Service):
+    class ExplodingHealthService(FakeQueryService):
         def health(self):
             raise RuntimeError("boom")
 
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "pytest")
-    app = create_app()
-    app.dependency_overrides[get_query_service] = ExplodingHealthService
-    with TestClient(app, raise_server_exceptions=False, headers={"X-API-Key": key}) as client:
+    client = api_test_client(service_cls=ExplodingHealthService, raise_server_exceptions=False)
+    with client:
         response = client.get("/api/v1/health")
 
     assert response.status_code == 500
@@ -233,20 +216,10 @@ def test_v0_routes_removed():
         assert client.post("/api/query", json={"question": "有效问题"}).status_code == 404
 
 
-def test_v1_metrics_counts_requests_and_errors(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "pytest")
-    app = create_app()
-    app.dependency_overrides[get_query_service] = FakeV1Service
-    FakeV1Service._db_path = db
-    headers = {"X-API-Key": key}
-    with TestClient(app) as client:
+def test_v1_metrics_counts_requests_and_errors(api_test_client):
+    client = api_test_client(with_header=False)
+    headers = {"X-API-Key": client.key}
+    with client:
         assert client.get("/api/v1/metrics").status_code == 401
         assert client.get("/api/v1/health", headers=headers).status_code == 200
         assert client.post("/api/v1/query", headers=headers, json={"question": "   "}).status_code == 422
@@ -260,26 +233,19 @@ def test_v1_metrics_counts_requests_and_errors(tmp_path, monkeypatch):
     assert set(["requests_total", "errors_total", "query_requests", "uptime_seconds"]) <= set(data)
 
 
-def test_v1_query_sanitizes_engine_errors(tmp_path, monkeypatch, caplog):
+def test_v1_query_sanitizes_engine_errors(api_test_client, caplog):
     import logging
 
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
     from api.errors import APIError, ErrorCode
-    from api.main import create_app, get_query_service
+    from tests.conftest import FakeQueryService
 
-    class LeakyService(FakeV1Service):
+    class LeakyService(FakeQueryService):
         def query_page(self, *args, **kwargs):
             raise APIError(ErrorCode.SQL_REJECTED, 422, "SQL 安全校验未通过：DROP TABLE secret_schema")
 
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "pytest")
-    app = create_app()
-    app.dependency_overrides[get_query_service] = LeakyService
-    with TestClient(app, headers={"X-API-Key": key}) as client:
-        with caplog.at_level(logging.WARNING, logger="api.main"):
+    client = api_test_client(service_cls=LeakyService)
+    with caplog.at_level(logging.WARNING, logger="api.main"):
+        with client:
             response = client.post("/api/v1/query", json={"question": "删库"})
 
     assert response.status_code == 422
@@ -291,48 +257,12 @@ def test_v1_query_sanitizes_engine_errors(tmp_path, monkeypatch, caplog):
     assert logged and "secret_schema" in logged[0].detail
 
 
-class FakeV1Service:
-    _db_path = "data/query.db"
-
-    @property
-    def db_path(self):
-        return self._db_path
-    def health(self):
-        return {"status": "ok", "database_ready": True, "llm_configured": False}
-
-    def schema(self):
-        return {"table_name": "orders", "columns": [{"name": "category", "type": "TEXT"}]}
-
-    def quality(self, table_name=None):
-        return {"table_name": "orders", "sampled_rows": 10, "total_rows": 10, "total_columns": 1,
-                "missing_values": {}, "duplicates": 0, "column_types": {"category": "str"}}
-
-    def query_page(self, question, clean_result, max_retries, page, page_size, table_name=None):
-        from api.errors import APIError, ErrorCode
-
-        if question == "触发拒绝":
-            raise APIError(ErrorCode.SQL_REJECTED, 422, "SQL 安全校验未通过")
-        return {"question": question, "sql": "SELECT 1", "columns": ["a"], "rows": [{"a": 1}],
-                "row_count": 1, "page": page, "page_size": page_size, "total_pages": 1,
-                "truncated": False, "chart_hint": "table", "execution_time": 0.01,
-                "valid": True, "retries": 0, "from_cache": False}
-
-
 @pytest.fixture
-def v1_client(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "pytest")
-    app = create_app()
-    FakeV1Service._db_path = db
-    app.dependency_overrides[get_query_service] = FakeV1Service
-    with TestClient(app, headers={"X-API-Key": key}) as test_client:
-        yield test_client
+def v1_client(api_test_client):
+    """P2-40：样板收敛到 conftest，默认预置 X-API-Key 请求头。"""
+    client = api_test_client()
+    with client:
+        yield client
 
 
 def test_v1_query_envelope(v1_client):
@@ -365,22 +295,15 @@ def test_v1_health_envelope(v1_client):
     assert body["data"]["status"] == "ok"
 
 
-def test_v1_query_wraps_unexpected_errors_in_envelope(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
+def test_v1_query_wraps_unexpected_errors_in_envelope(api_test_client):
+    from tests.conftest import FakeQueryService
 
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    class ExplodingService(FakeV1Service):
+    class ExplodingService(FakeQueryService):
         def query_page(self, *args, **kwargs):
             raise RuntimeError("boom")
 
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "pytest")
-    app = create_app()
-    app.dependency_overrides[get_query_service] = ExplodingService
-    with TestClient(app, raise_server_exceptions=False, headers={"X-API-Key": key}) as client:
+    client = api_test_client(service_cls=ExplodingService, raise_server_exceptions=False)
+    with client:
         response = client.post("/api/v1/query", json={"question": "有效问题"})
 
     assert response.status_code == 500
@@ -443,12 +366,13 @@ def test_unexpected_route_error_logged_and_sanitized(v1_client, caplog):
     import logging
 
     from api.main import get_query_service
+    from tests.conftest import FakeQueryService
 
-    class ExplodingSchema(FakeV1Service):
+    class ExplodingSchema(FakeQueryService):
         def schema(self, table_name=None):
             raise RuntimeError("secret-boom: raw pandas/字段原文")
 
-    v1_client.app.dependency_overrides[get_query_service] = ExplodingSchema
+    v1_client.app.dependency_overrides[get_query_service] = lambda: ExplodingSchema()
     with caplog.at_level(logging.ERROR, logger="api.main"):
         response = v1_client.get("/api/v1/schema")
 
@@ -542,111 +466,57 @@ def test_read_upload_bounded_stops_before_full_read():
     assert reads < 200  # 远未读完即拒绝
 
 
-def test_upload_rejects_oversize_before_register(tmp_path, monkeypatch):
+def test_upload_rejects_oversize_before_register(api_test_client, monkeypatch):
     import api.main as main_module
-    import pytest
 
     from api.datasets import list_datasets
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
 
     monkeypatch.setattr(main_module, "MAX_UPLOAD_BYTES", 10)
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci")
-
-    class UploadOnlyService:
-        @property
-        def db_path(self):
-            return db
-
-    app = create_app()
-    app.dependency_overrides[get_query_service] = UploadOnlyService
-    files = {"file": ("a.csv", "a,b\n" + "1,2\n" * 20, "text/csv")}
-    with TestClient(app, headers={"X-API-Key": key}) as client:
-        response = client.post("/api/v1/datasets", files=files)
+    with api_test_client() as client:
+        response = client.post(
+            "/api/v1/datasets",
+            files={"file": ("a.csv", "a,b\n" + "1,2\n" * 20, "text/csv")},
+        )
 
     assert response.status_code == 422
     body = response.json()
     assert body["code"] == "UPLOAD_REJECTED"
-    assert list_datasets(db) == []
+    assert list_datasets(client.db) == []
 
 
 # ── P2-19 / P2-20 / P2-21 / P2-23：上传错误码、白名单、编码回退、净化 ─
 
-def test_upload_bad_extension_uses_upload_rejected_code(tmp_path, monkeypatch):
+def test_upload_bad_extension_uses_upload_rejected_code(api_test_client):
     """P2-19：上传校验失败不再复用 INVALID_QUESTION。"""
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci")
-
-    class UploadOnlyService:
-        @property
-        def db_path(self):
-            return db
-
-    app = create_app()
-    app.dependency_overrides[get_query_service] = UploadOnlyService
-    with TestClient(app, headers={"X-API-Key": key}) as client:
-        response = client.post("/api/v1/datasets", files={"file": ("evil.exe", b"MZ", "application/x-msdownload")})
+    with api_test_client() as client:
+        response = client.post(
+            "/api/v1/datasets",
+            files={"file": ("evil.exe", b"MZ", "application/x-msdownload")},
+        )
 
     assert response.status_code == 422
     assert response.json()["code"] == "UPLOAD_REJECTED"
 
 
-def test_upload_legacy_xls_rejected(tmp_path, monkeypatch):
+def test_upload_legacy_xls_rejected(api_test_client):
     """P2-20：.xls 不再放行——解析所需 xlrd 未声明，放行必然 422。"""
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci")
-
-    class UploadOnlyService:
-        @property
-        def db_path(self):
-            return db
-
-    app = create_app()
-    app.dependency_overrides[get_query_service] = UploadOnlyService
-    with TestClient(app, headers={"X-API-Key": key}) as client:
-        response = client.post("/api/v1/datasets", files={"file": ("old.xls", b"\xd0\xcf\x11\xe0", "application/vnd.ms-excel")})
+    with api_test_client() as client:
+        response = client.post(
+            "/api/v1/datasets",
+            files={"file": ("old.xls", b"\xd0\xcf\x11\xe0", "application/vnd.ms-excel")},
+        )
 
     assert response.status_code == 422
     assert response.json()["code"] == "UPLOAD_REJECTED"
 
 
-def test_upload_parse_failure_message_sanitized(tmp_path, monkeypatch):
+def test_upload_parse_failure_message_sanitized(api_test_client):
     """P2-23：解析失败细节（编码器/pandas 报错原文）不出服务端。"""
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci")
-
-    class UploadOnlyService:
-        @property
-        def db_path(self):
-            return db
-
-    app = create_app()
-    app.dependency_overrides[get_query_service] = UploadOnlyService
     garbage = bytes([0xFF, 0xFE, 0x41, 0x00, 0x42]) * 64  # utf-8-sig 与 gbk 均无法解码
-    with TestClient(app, headers={"X-API-Key": key}) as client:
-        response = client.post("/api/v1/datasets", files={"file": ("bad.csv", garbage, "text/csv")})
+    with api_test_client() as client:
+        response = client.post(
+            "/api/v1/datasets", files={"file": ("bad.csv", garbage, "text/csv")}
+        )
 
     body = response.json()
     assert response.status_code == 422
@@ -656,27 +526,13 @@ def test_upload_parse_failure_message_sanitized(tmp_path, monkeypatch):
     assert body["message"] == "文件未通过上传校验，请检查格式与大小"
 
 
-def test_upload_gbk_csv_accepted(tmp_path, monkeypatch):
+def test_upload_gbk_csv_accepted(api_test_client):
     """P2-21：GBK 编码 CSV（中文 Excel 导出常见）可以正常入库。"""
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci")
-
-    class UploadOnlyService:
-        @property
-        def db_path(self):
-            return db
-
-    app = create_app()
-    app.dependency_overrides[get_query_service] = UploadOnlyService
     gbk_csv = "类别,金额\n食品,12.5\n图书,9.9\n".encode("gbk")
-    with TestClient(app, headers={"X-API-Key": key}) as client:
-        response = client.post("/api/v1/datasets", files={"file": ("gbk导出.csv", gbk_csv, "text/csv")})
+    with api_test_client() as client:
+        response = client.post(
+            "/api/v1/datasets", files={"file": ("gbk导出.csv", gbk_csv, "text/csv")}
+        )
 
     assert response.status_code == 200, response.text
     data = response.json()["data"]
@@ -686,26 +542,19 @@ def test_upload_gbk_csv_accepted(tmp_path, monkeypatch):
 
 # ── P2-18：request_id 全链路共用（入口中间件生成） ───────────────────
 
-def test_error_envelope_request_id_comes_from_request_context(tmp_path, monkeypatch, caplog):
+def test_error_envelope_request_id_comes_from_request_context(api_test_client, caplog):
     import logging
 
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
     from api.errors import APIError, ErrorCode
-    from api.main import create_app, get_query_service
+    from tests.conftest import FakeQueryService
 
-    class LeakyService(FakeV1Service):
+    class LeakyService(FakeQueryService):
         def query_page(self, *args, **kwargs):
             raise APIError(ErrorCode.SQL_REJECTED, 422, "SQL 安全校验未通过")
 
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "pytest")
-    app = create_app()
-    app.dependency_overrides[get_query_service] = LeakyService
+    client = api_test_client(service_cls=LeakyService)
     with caplog.at_level(logging.WARNING, logger="api.main"):
-        with TestClient(app, headers={"X-API-Key": key}) as client:
+        with client:
             response = client.post("/api/v1/query", json={"question": "q"})
 
     request_id = response.json()["request_id"]

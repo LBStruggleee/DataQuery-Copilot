@@ -4,7 +4,6 @@ QueryEngine 单元测试 — 用 mock LLM 避免 API 调用
 import json
 import logging
 import os
-import tempfile
 import sqlite3
 
 import pandas as pd
@@ -63,17 +62,13 @@ def test_show_schema(engine):
     assert "category" in schema
 
 
-def test_load_csv(engine, sample_df):
+def test_load_csv(engine, sample_df, tmp_path):
     """测试加载 CSV 数据"""
-    csv_path = os.path.join(tempfile.gettempdir(), "test_load.csv")
+    csv_path = tmp_path / "test_load.csv"
     sample_df.to_csv(csv_path, index=False)
-    try:
-        info = engine.load_data(csv_path, "test_orders")
-        assert info["row_count"] == len(sample_df)
-        assert info["table_name"] == "test_orders"
-    finally:
-        if os.path.exists(csv_path):
-            os.remove(csv_path)
+    info = engine.load_data(str(csv_path), "test_orders")
+    assert info["row_count"] == len(sample_df)
+    assert info["table_name"] == "test_orders"
 
 
 def test_quality_check(engine):
@@ -115,12 +110,22 @@ def test_ask_auto_retry(engine_with_mock):
 
 
 def test_ask_retry_exhausted(engine_with_mock):
-    """测试重试耗尽：修正的 SQL 仍然无法执行"""
+    """测试重试耗尽：修正的 SQL 仍然无法执行
+
+    P2-38: 弱析取断言（error is not None or valid is False）几乎恒真，
+    改为精确断言错误前缀、错误来源与重试次数。
+    """
     engine_with_mock.llm._sql = "SELECT nonexistent FROM orders"
     # 让 fix_sql 也返回无效 SQL
     engine_with_mock.llm.fix_sql = lambda *a, **k: "SELECT also_bad FROM orders"
     result = engine_with_mock.ask("会失败的查询", max_retries=1)
-    assert result["error"] is not None or result["valid"] is False
+
+    assert result["error_code"] == "EXECUTION_FAILED"
+    assert result["error"] is not None
+    assert result["error"].startswith("SQL 执行失败（已重试 1 次）")
+    assert "no such column" in result["error"]  # 数据库错误原文进入错误信息
+    assert "also_bad" in result["error"]  # 失败的是最后一次修正后的 SQL，而非首条
+    assert result["retries"] == 1
 
 
 # ── 缓存 ───────────────────────────────────────────────
@@ -405,3 +410,41 @@ def test_quality_check_rejects_invalid_table_name(engine):
     engine.table_name = "orders; DROP TABLE orders"
     with pytest.raises(ValueError):
         engine.quality_check()
+
+
+# ── P1-09: ask() 执行窗口表白名单 ───────────────────────
+
+def test_ask_blocks_cross_table_sql_with_clear_error(engine_with_mock, temp_db_path):
+    """P1-09: LLM 被诱导生成引用其他表的 SQL 时，执行层表白名单拦截并返回明确错误"""
+    # 造一张敏感表，模拟 validate_sql 拦不住的 SELECT key_hash FROM api_keys 场景
+    conn = sqlite3.connect(temp_db_path)
+    try:
+        pd.DataFrame({"key_hash": ["x"], "name": ["k"]}).to_sql("api_keys", conn, index=False)
+    finally:
+        conn.close()
+
+    engine_with_mock.llm._sql = "SELECT key_hash, name FROM api_keys"
+    engine_with_mock.llm.fix_sql = lambda *a, **k: "SELECT key_hash FROM api_keys"
+    result = engine_with_mock.ask("看看有哪些 key", max_retries=1)
+
+    assert result["error"] is not None
+    assert "api_keys" in result["error"]  # 明确指出被拒对象
+    assert "拒绝" in result["error"]
+    assert result["error_code"] == "EXECUTION_FAILED"
+
+
+def test_ask_cross_table_sql_fixed_by_retry(engine_with_mock, temp_db_path):
+    """P1-09: 明确错误可被修正闭环消化——LLM 改写为只查当前表后成功"""
+    conn = sqlite3.connect(temp_db_path)
+    try:
+        pd.DataFrame({"key_hash": ["x"], "name": ["k"]}).to_sql("api_keys", conn, index=False)
+    finally:
+        conn.close()
+
+    engine_with_mock.llm._sql = "SELECT key_hash FROM api_keys"
+    result = engine_with_mock.ask("看看有哪些 key", max_retries=2)
+
+    assert result["error"] is None
+    assert result["valid"] is True
+    assert result["retries"] == 1  # 第一次被表白名单拒绝，修正后成功
+    assert result["row_count"] > 0  # 修正后的 SQL（默认查 orders）成功返回数据

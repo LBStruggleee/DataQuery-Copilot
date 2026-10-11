@@ -148,12 +148,14 @@ class QueryEngine:
 
         # 4. 执行查询（带自动重试：失败时把错误回传 LLM 修正）
         # 累积失败历史：每次失败的 SQL 与错误都传给修正 prompt，避免原样重放
+        # P1-09：执行窗口表白名单——只允许 SELECT 当前表与 sqlite_master，
+        # LLM 引用其他表/对象时执行层返回明确错误（可据此触发修正）
         df = None
         failure_history: list = []
         for attempt in range(max_retries + 1):
             start_time = time.time()
             try:
-                df = self.loader.execute_query(sql)
+                df = self.loader.execute_query(sql, allowed_tables=(self.table_name,))
                 result["execution_time"] = round(time.time() - start_time, 3)
                 break  # 执行成功，跳出重试循环
             except Exception as e:
@@ -277,7 +279,9 @@ class QueryEngine:
         """对全表执行数据质量检查"""
         # 复用 DataLoader 的统一表名白名单校验，不绕过核心库防护
         table_name = self.loader.validate_table_name(self.table_name)
-        df = self.loader.execute_query(f"SELECT * FROM {table_name} LIMIT 10000")
+        df = self.loader.execute_query(
+            f"SELECT * FROM {table_name} LIMIT 10000", allowed_tables=(table_name,)
+        )
         self.cleaner.print_quality_report(df)
         return self.cleaner.quality_report(df)
 

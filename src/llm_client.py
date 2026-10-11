@@ -197,6 +197,9 @@ ORDER BY total_sales DESC
 
         # 移除字符串字面量和注释，避免误判
         sql_clean = re.sub(r"'[^']*'", "''", sql_upper)  # 移除单引号字符串
+        # P2-32: 双引号内容同样剥离——SQLite 双引号既可作标识符（"col"）也可回退为
+        # 字符串字面量（DQS），不剥离会把 SELECT "delete" FROM t 误判为 DELETE
+        sql_clean = re.sub(r'"[^"]*"', '""', sql_clean)
         sql_clean = re.sub(r"--[^\n]*", "", sql_clean)    # 移除单行注释
         sql_clean = re.sub(r"/\*.*?\*/", "", sql_clean, flags=re.DOTALL)  # 移除多行注释
 

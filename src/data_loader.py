@@ -9,9 +9,11 @@ import os
 import re
 import sqlite3
 import time
-import pandas as pd
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional, Union
+
+import pandas as pd
 
 
 class DataLoader:
@@ -19,11 +21,22 @@ class DataLoader:
 
     execute_query 自带资源边界：
     - 行数上限（max_rows，默认 10000）：fetchmany 分批物化，超出即截断；
-    - 执行超时（query_timeout，默认 10s）：set_progress_handler 超时中断长查询。
+    - 执行超时（query_timeout，默认 10s）：set_progress_handler 超时中断长查询；
+    - 表白名单（allowed_tables，P1-09）：传入时用 set_authorizer 限制本次查询
+      仅可 SELECT 白名单表（及 sqlite_master），LLM 生成 SQL 引用其他表/对象时
+      返回明确错误。authorizer 只在查询窗口挂载，结束后移除，不影响 to_sql 写入。
     """
 
     # 表名白名单：与 API 层（api/services.py）的标识符正则保持一致
     _TABLE_NAME_PATTERN = r"[A-Za-z_][A-Za-z0-9_]*"
+
+    # SQLite authorizer 行为码（Python 3.11+ 内置同名常量；此处带回退值保证兼容）
+    _SQLITE_OK = getattr(sqlite3, "SQLITE_OK", 0)
+    _SQLITE_DENY = getattr(sqlite3, "SQLITE_DENY", 1)
+    _SQLITE_SELECT = getattr(sqlite3, "SQLITE_SELECT", 21)
+    _SQLITE_READ = getattr(sqlite3, "SQLITE_READ", 20)
+    _SQLITE_FUNCTION = getattr(sqlite3, "SQLITE_FUNCTION", 31)
+    _SQLITE_RECURSIVE = getattr(sqlite3, "SQLITE_RECURSIVE", 33)
 
     def __init__(
         self,
@@ -199,7 +212,12 @@ class DataLoader:
             lines.append(f"  - {col['name']} ({col['type']})")
         return "\n".join(lines)
 
-    def execute_query(self, sql: str, max_rows: Optional[int] = None) -> pd.DataFrame:
+    def execute_query(
+        self,
+        sql: str,
+        max_rows: Optional[int] = None,
+        allowed_tables: Optional[Sequence[str]] = None,
+    ) -> pd.DataFrame:
         """
         执行 SQL 查询，返回 DataFrame
 
@@ -208,10 +226,37 @@ class DataLoader:
           判断是否截断），避免大笛卡尔积全量物化耗尽内存；
         - 超时中断：set_progress_handler 在虚拟机指令间隙检查 deadline，
           超时返回非零值使 SQLite 中断执行（如无终止的 WITH RECURSIVE）。
+
+        表白名单（P1-09）：传入 allowed_tables 时挂载 sqlite3 set_authorizer，
+        仅允许对白名单表（及 sqlite_master）做 SELECT 读取；引用其他表、
+        写入、PRAGMA、ATTACH 等一律拒绝并抛出含被拒对象的明确错误。
+        authorizer 只在本次查询窗口挂载，结束后移除，不影响 to_sql 写入路径。
         """
         limit = self.max_rows if max_rows is None else max_rows
         if limit < 1:
             raise ValueError(f"max_rows 必须为正整数，当前为: {limit}")
+
+        # P1-09：查询窗口表白名单（LLM 生成 SQL 的执行层防护）
+        allowed: Optional[set] = None
+        denied_objects: list = []
+        if allowed_tables is not None:
+            allowed = {str(t).lower() for t in allowed_tables}
+            allowed.update({"sqlite_master", "sqlite_temp_master"})
+
+            def _read_only_authorizer(action, arg1, arg2, db_name, source):
+                # 语句级 SELECT / 标量函数 / 递归 CTE 放行；
+                # 列级 READ 仅放行白名单表；其余动作（写入/DDL/PRAGMA/ATTACH/
+                # 加载扩展等）拒绝并记录被拒对象，用于生成明确错误。
+                if action in (self._SQLITE_SELECT, self._SQLITE_FUNCTION,
+                              self._SQLITE_RECURSIVE):
+                    return self._SQLITE_OK
+                if action == self._SQLITE_READ:
+                    if arg1 is None or str(arg1).lower() in allowed:
+                        return self._SQLITE_OK
+                    denied_objects.append(str(arg1))
+                    return self._SQLITE_DENY
+                denied_objects.append(str(arg1) if arg1 else "<statement>")
+                return self._SQLITE_DENY
 
         deadline = time.monotonic() + self.query_timeout
 
@@ -219,20 +264,27 @@ class DataLoader:
             # 返回非零值 -> SQLite 以 SQLITE_INTERRUPT 中断当前语句
             return 1 if time.monotonic() > deadline else 0
 
+        self.conn.set_authorizer(_read_only_authorizer if allowed is not None else None)
         self.conn.set_progress_handler(_interrupt_on_timeout, 100_000)
         cursor = self.conn.cursor()
         try:
             cursor.execute(sql)
             columns = [d[0] for d in cursor.description] if cursor.description else []
             rows = cursor.fetchmany(limit + 1) if columns else []
-        except sqlite3.OperationalError as e:
-            if "interrupted" in str(e).lower():
+        except sqlite3.DatabaseError as e:
+            if denied_objects:
+                raise PermissionError(
+                    f"SQL 被拒绝：引用了表白名单之外的数据库对象 {sorted(set(denied_objects))}，"
+                    f"本次查询仅允许访问表 {sorted(allowed)}"
+                ) from e
+            if isinstance(e, sqlite3.OperationalError) and "interrupted" in str(e).lower():
                 raise TimeoutError(
                     f"SQL 执行超过 {self.query_timeout}s，已被中断"
                 ) from e
             raise
         finally:
             cursor.close()
+            self.conn.set_authorizer(None)  # 查询窗口结束即移除，写入路径不受影响
             self.conn.set_progress_handler(None, 0)
 
         truncated = len(rows) > limit

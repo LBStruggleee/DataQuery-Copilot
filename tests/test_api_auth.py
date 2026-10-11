@@ -107,31 +107,10 @@ def test_key_material_never_logged(tmp_path, caplog):
 
 
 @pytest.fixture
-def authed_client(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci")
-
-    class FakeService:
-        @property
-        def db_path(self):
-            return db
-
-        def query_page(self, question, clean_result, max_retries, page, page_size, table_name=None):
-            return {"question": question, "sql": "SELECT 1", "columns": ["a"], "rows": [{"a": 1}],
-                    "row_count": 1, "page": 1, "page_size": 10, "total_pages": 1,
-                    "truncated": False, "chart_hint": "table", "execution_time": 0.01,
-                    "valid": True, "retries": 0, "from_cache": False}
-
-    app = create_app()
-    app.dependency_overrides[get_query_service] = FakeService
-    with TestClient(app) as client:
-        client.key = key
+def authed_client(api_test_client):
+    """P2-40：样板收敛到 conftest（无预置请求头，测试可分别带/不带 Key 请求）。"""
+    client = api_test_client(with_header=False)
+    with client:
         yield client
 
 
@@ -152,35 +131,11 @@ def test_valid_key_passes(authed_client):
     assert response.json()["code"] == "OK"
 
 
-def test_quota_burned_only_by_query(tmp_path, monkeypatch):
+def test_quota_burned_only_by_query(api_test_client):
     """终审 Important 1：health 等读接口不得烧配额，只有 query 计数。"""
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci", daily_quota=1)
-
-    class FakeService:
-        @property
-        def db_path(self):
-            return db
-
-        def health(self):
-            return {"status": "ok", "database_ready": True, "llm_configured": False}
-
-        def query_page(self, *args, **kwargs):
-            return {"question": "q", "sql": "SELECT 1", "columns": ["a"], "rows": [{"a": 1}],
-                    "row_count": 1, "page": 1, "page_size": 10, "total_pages": 1,
-                    "truncated": False, "chart_hint": "table", "execution_time": 0.01,
-                    "valid": True, "retries": 0, "from_cache": False}
-
-    app = create_app()
-    app.dependency_overrides[get_query_service] = FakeService
-    headers = {"X-API-Key": key}
-    with TestClient(app) as client:
+    client = api_test_client(key_kwargs={"daily_quota": 1}, with_header=False)
+    headers = {"X-API-Key": client.key}
+    with client:
         assert client.get("/api/v1/health", headers=headers).status_code == 200
         assert client.get("/api/v1/health", headers=headers).status_code == 200
         ok = client.post("/api/v1/query", headers=headers, json={"question": "有效问题"})
@@ -215,6 +170,63 @@ def test_manage_keys_cli(tmp_path):
         capture_output=True, text=True, cwd="D:/DataQuery-Copilot",
     )
     assert revoked.returncode == 0
+
+
+def test_manage_keys_revoke_via_stdin(tmp_path):
+    """P2-30：revoke 支持 --stdin 读取明文 Key，避免进入 shell 历史/进程列表。"""
+    import subprocess
+    import sys
+
+    from api.auth import verify_key
+    from api.errors import APIError
+
+    db = str(tmp_path / "t.db")
+    created = subprocess.run(
+        [sys.executable, "scripts/manage_keys.py", "--db", db, "create", "--name", "ci"],
+        capture_output=True, text=True, cwd="D:/DataQuery-Copilot",
+    )
+    assert created.returncode == 0
+    key = created.stdout.strip().splitlines()[-1]
+    assert key.startswith("dqc_")
+
+    revoked = subprocess.run(
+        [sys.executable, "scripts/manage_keys.py", "--db", db, "revoke", "--stdin"],
+        input=key + "\n", capture_output=True, text=True, cwd="D:/DataQuery-Copilot",
+    )
+    assert revoked.returncode == 0, revoked.stderr
+    assert "revoked" in revoked.stdout
+
+    # 吊销确实生效
+    with pytest.raises(APIError):
+        verify_key(db, key)
+
+
+def test_manage_keys_revoke_stdin_conflicts_with_argv_key(tmp_path):
+    """P2-30：--stdin 与位置参数 key 二选一，同时给出报错退出。"""
+    import subprocess
+    import sys
+
+    db = str(tmp_path / "t.db")
+    result = subprocess.run(
+        [sys.executable, "scripts/manage_keys.py", "--db", db, "revoke", "dqc_somekey", "--stdin"],
+        input="dqc_otherkey\n", capture_output=True, text=True, cwd="D:/DataQuery-Copilot",
+    )
+    assert result.returncode != 0
+    assert "二选一" in result.stderr
+
+
+def test_manage_keys_revoke_requires_key(tmp_path):
+    """P2-30：既无位置参数也无 --stdin 时报错退出，不再 AttributeError。"""
+    import subprocess
+    import sys
+
+    db = str(tmp_path / "t.db")
+    result = subprocess.run(
+        [sys.executable, "scripts/manage_keys.py", "--db", db, "revoke"],
+        capture_output=True, text=True, cwd="D:/DataQuery-Copilot",
+    )
+    assert result.returncode != 0
+    assert "明文 Key" in result.stderr
 
 
 # ── P1-06：鉴权依赖去事件循环阻塞、DDL 移到启动期 ──────────────────
@@ -279,37 +291,27 @@ def test_charge_quota_atomic_under_concurrency(tmp_path):
 
 # ── SUP-01：配额在查询成功后记账，失败不扣 ──────────────────────────
 
-def test_failed_query_does_not_charge_quota(tmp_path, monkeypatch):
+def test_failed_query_does_not_charge_quota(api_test_client):
     """SUP-01：查询失败（SQL_REJECTED 等）不消耗当日配额。"""
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
     from api.errors import APIError, ErrorCode
-    from api.main import create_app, get_query_service
+    from tests.conftest import FakeQueryService
 
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci")
     calls = []
 
-    class RejectedService:
-        @property
-        def db_path(self):
-            return db
-
+    class RejectedService(FakeQueryService):
         def query_page(self, *args, **kwargs):
             calls.append(1)
             raise APIError(ErrorCode.SQL_REJECTED, 422, "SQL 安全校验未通过")
 
-    app = create_app()
-    app.dependency_overrides[get_query_service] = RejectedService
-    with TestClient(app, headers={"X-API-Key": key}) as client:
+    client = api_test_client(service_cls=RejectedService, with_header=False)
+    headers = {"X-API-Key": client.key}
+    with client:
         for _ in range(3):
-            response = client.post("/api/v1/query", json={"question": "有效问题"})
+            response = client.post("/api/v1/query", headers=headers, json={"question": "有效问题"})
             assert response.status_code == 422
 
     assert len(calls) == 3
-    conn = sqlite3.connect(db)
+    conn = sqlite3.connect(client.db)
     try:
         charged = conn.execute("SELECT COALESCE(SUM(count), 0) FROM key_usage").fetchone()[0]
     finally:
@@ -317,70 +319,31 @@ def test_failed_query_does_not_charge_quota(tmp_path, monkeypatch):
     assert charged == 0  # 三次失败查询，配额分文未扣
 
 
-def test_exhausted_quota_fails_fast_before_service(tmp_path, monkeypatch):
+def test_exhausted_quota_fails_fast_before_service(api_test_client):
     """SUP-01 配套：配额已尽时提前 429，不再调用 service（不白付 LLM 成本）。"""
-    from fastapi.testclient import TestClient
+    from tests.conftest import FakeQueryService
 
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci", daily_quota=0)
-    calls = []
-
-    class NeverCalledService:
-        @property
-        def db_path(self):
-            return db
-
+    class NeverCalledService(FakeQueryService):
         def query_page(self, *args, **kwargs):
-            calls.append(1)
             raise AssertionError("query_page must not run when quota is exhausted")
 
-    app = create_app()
-    app.dependency_overrides[get_query_service] = NeverCalledService
-    with TestClient(app, headers={"X-API-Key": key}) as client:
+    client = api_test_client(service_cls=NeverCalledService, key_kwargs={"daily_quota": 0})
+    with client:
         response = client.post("/api/v1/query", json={"question": "有效问题"})
 
     assert response.status_code == 429
     assert response.json()["code"] == "RATE_LIMITED"
-    assert calls == []
 
 
-def test_quota_charged_after_successful_query(tmp_path, monkeypatch):
+def test_quota_charged_after_successful_query(api_test_client):
     """SUP-01：成功查询记账 1 次；health 等读接口依旧不烧配额。"""
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci", daily_quota=2)
-
-    class FakeService:
-        @property
-        def db_path(self):
-            return db
-
-        def health(self):
-            return {"status": "ok", "database_ready": True, "llm_configured": False}
-
-        def query_page(self, *args, **kwargs):
-            return {"question": "q", "sql": "SELECT 1", "columns": ["a"], "rows": [{"a": 1}],
-                    "row_count": 1, "page": 1, "page_size": 10, "total_pages": 1,
-                    "truncated": False, "chart_hint": "table", "execution_time": 0.01,
-                    "valid": True, "retries": 0, "from_cache": False}
-
-    app = create_app()
-    app.dependency_overrides[get_query_service] = FakeService
-    headers = {"X-API-Key": key}
-    with TestClient(app) as client:
+    client = api_test_client(key_kwargs={"daily_quota": 2}, with_header=False)
+    headers = {"X-API-Key": client.key}
+    with client:
         assert client.get("/api/v1/health", headers=headers).status_code == 200
         assert client.post("/api/v1/query", headers=headers, json={"question": "q"}).status_code == 200
         assert client.post("/api/v1/query", headers=headers, json={"question": "q"}).status_code == 200
-        conn = sqlite3.connect(db)
+        conn = sqlite3.connect(client.db)
         try:
             charged = conn.execute("SELECT COALESCE(SUM(count), 0) FROM key_usage").fetchone()[0]
         finally:
@@ -438,28 +401,14 @@ def test_auth_failure_audit_links_request_id_and_ip(tmp_path, monkeypatch, caplo
 
 # ── P1-10：上传计入日配额 + 竞态回滚 ───────────────────────────────
 
-def _upload_client(tmp_path, monkeypatch, **create_kwargs):
-    from fastapi.testclient import TestClient
-
-    from api.auth import create_key
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci", **create_kwargs)
-
-    class UploadOnlyService:
-        @property
-        def db_path(self):
-            return db
-
-    app = create_app()
-    app.dependency_overrides[get_query_service] = UploadOnlyService
-    return TestClient(app), key, db
+def _upload_client(api_test_client, **create_kwargs):
+    """P2-40：上传路径样板收敛到 conftest（返回未进入 with 的 client/key/db）。"""
+    client = api_test_client(key_kwargs=create_kwargs, with_header=False)
+    return client, client.key, client.db
 
 
-def test_upload_charges_daily_quota(tmp_path, monkeypatch):
-    client, key, db = _upload_client(tmp_path, monkeypatch, daily_quota=1)
+def test_upload_charges_daily_quota(api_test_client):
+    client, key, db = _upload_client(api_test_client, daily_quota=1)
     headers = {"X-API-Key": key}
     files = {"file": ("a.csv", "类别,金额\n食品,12.5\n".encode("utf-8"), "text/csv")}
     with client:
@@ -478,40 +427,26 @@ def test_upload_charges_daily_quota(tmp_path, monkeypatch):
     assert datasets == 1  # 配额拒绝发生在入库之前，未产生第二个数据集
 
 
-def test_upload_quota_race_rolls_back_registration(tmp_path, monkeypatch):
+def test_upload_quota_race_rolls_back_registration(api_test_client, monkeypatch):
     """上传成功但配额记账失败的竞态：回滚注册，不留下未计费的数据集。"""
-    from fastapi.testclient import TestClient
-
     from api import main as main_module
-    from api.auth import create_key
     from api.datasets import list_datasets
     from api.errors import APIError, ErrorCode
-    from api.main import create_app, get_query_service
-
-    db = str(tmp_path / "t.db")
-    monkeypatch.setenv("DB_PATH", db)
-    key = create_key(db, "ci")
 
     def exploding_charge(db_path, key_hash):
         raise APIError(ErrorCode.RATE_LIMITED, 429, "今日配额已用尽")
 
     monkeypatch.setattr(main_module, "charge_quota", exploding_charge)
 
-    class UploadOnlyService:
-        @property
-        def db_path(self):
-            return db
-
-    app = create_app()
-    app.dependency_overrides[get_query_service] = UploadOnlyService
+    client = api_test_client()
     files = {"file": ("a.csv", "a,b\n1,2\n".encode("utf-8"), "text/csv")}
-    with TestClient(app, headers={"X-API-Key": key}) as client:
+    with client:
         response = client.post("/api/v1/datasets", files=files)
 
     assert response.status_code == 429
     assert response.json()["code"] == "RATE_LIMITED"
-    assert list_datasets(db) == []
-    conn = sqlite3.connect(db)
+    assert list_datasets(client.db) == []
+    conn = sqlite3.connect(client.db)
     try:
         ds_tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'ds_%'"

@@ -4,6 +4,12 @@
     python scripts/manage_keys.py create --name <名称> [--quota N] [--db PATH]
     python scripts/manage_keys.py list [--db PATH]
     python scripts/manage_keys.py revoke <明文Key> [--db PATH]
+    echo "<明文Key>" | python scripts/manage_keys.py revoke --stdin [--db PATH]   # 推荐
+
+安全提示（P2-30）:
+    明文 Key 作为命令行参数传入会被 shell 历史（history）与进程列表（ps）记录；
+    推荐改用 --stdin 经标准输入传入，并在必要时清理 shell 历史（如 history -c
+    或清空 ~/.bash_history / ~/.zsh_history 对应条目）。
 
 create 输出的明文 Key 只显示一次，请立即保存。
 """
@@ -28,7 +34,14 @@ def main() -> int:
 
     sub.add_parser("list", help="列出 Key（仅前缀）")
     p_revoke = sub.add_parser("revoke", help="吊销 Key")
-    p_revoke.add_argument("key", help="签发时输出的明文 Key")
+    p_revoke.add_argument(
+        "key", nargs="?", default=None,
+        help="签发时输出的明文 Key；更安全的做法是改用 --stdin（避免进入 shell 历史/进程列表）",
+    )
+    p_revoke.add_argument(
+        "--stdin", action="store_true",
+        help="从 stdin 读取明文 Key（推荐），与位置参数 key 二选一",
+    )
 
     args = parser.parse_args()
     if args.command == "create":
@@ -40,7 +53,14 @@ def main() -> int:
             state = "revoked" if item["revoked"] else "active"
             print(f'{item["prefix"]}...  {item["name"]}  {state}  quota={item["daily_quota"]}  {item["created_at"]}')
     elif args.command == "revoke":
-        print("revoked" if revoke_key(args.db, args.key) else "not found")
+        key = args.key
+        if args.stdin:
+            if key:
+                parser.error("--stdin 与位置参数 key 只能二选一")
+            key = sys.stdin.read().strip()
+        if not key:
+            parser.error("必须提供明文 Key：作为位置参数传入，或用 --stdin 从标准输入读取")
+        print("revoked" if revoke_key(args.db, key) else "not found")
     return 0
 
 

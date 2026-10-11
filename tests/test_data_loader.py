@@ -1,8 +1,6 @@
 """
 DataLoader 单元测试
 """
-import os
-import tempfile
 import pandas as pd
 import pytest
 
@@ -10,9 +8,9 @@ from src.data_loader import DataLoader
 
 
 @pytest.fixture
-def temp_loader():
-    """创建临时数据库 + 测试数据"""
-    db_path = os.path.join(tempfile.gettempdir(), "test_query.db")
+def temp_loader(tmp_path):
+    """创建临时数据库 + 测试数据（P2-39：pytest tmp_path，并行运行不互相污染）"""
+    db_path = str(tmp_path / "test_query.db")
     loader = DataLoader(db_path)
 
     # 写入测试数据
@@ -27,8 +25,6 @@ def temp_loader():
     yield loader
 
     loader.close()
-    if os.path.exists(db_path):
-        os.remove(db_path)
 
 
 def test_get_table_info(temp_loader):
@@ -65,18 +61,16 @@ def test_execute_query_with_where(temp_loader):
     assert len(df) == 3  # 200, 150, 300 三条
 
 
-def test_load_csv(temp_loader):
+def test_load_csv(temp_loader, tmp_path):
     """测试 CSV 导入"""
     # 创建临时 CSV
-    csv_path = os.path.join(tempfile.gettempdir(), "test_data.csv")
+    csv_path = tmp_path / "test_data.csv"
     df = pd.DataFrame({"id": [1, 2], "name": ["A", "B"]})
     df.to_csv(csv_path, index=False)
 
-    info = temp_loader.load_csv(csv_path, "test_table")
+    info = temp_loader.load_csv(str(csv_path), "test_table")
     assert info["row_count"] == 2
     assert info["table_name"] == "test_table"
-
-    os.remove(csv_path)
 
 
 # ── P1-01: Excel 导入默认第一个工作表 ───────────────────
@@ -208,3 +202,119 @@ def test_data_loader_rejects_invalid_limits(temp_db_path):
         DataLoader(temp_db_path, max_rows=0)
     with pytest.raises(ValueError):
         DataLoader(temp_db_path, query_timeout=0)
+
+
+# ── P2-37: PRAGMA table_info / load_excel 插值入口的核心库层防护 ────
+
+def test_get_schema_text_rejects_bad_table_name(temp_loader):
+    """P2-37: get_schema_text 走 get_table_info，PRAGMA table_info f-string
+    插值之前有白名单校验，直连路径不可注入"""
+    with pytest.raises(ValueError):
+        temp_loader.get_schema_text('orders"); DROP TABLE orders; PRAGMA table_info("x')
+
+
+def test_load_excel_rejects_bad_table_name(temp_loader, tmp_path):
+    """P2-37: load_excel 入口同样校验表名"""
+    pytest.importorskip("openpyxl")
+    path = tmp_path / "tiny.xlsx"
+    with pd.ExcelWriter(path) as writer:
+        pd.DataFrame({"id": [1]}).to_excel(writer, index=False)
+    with pytest.raises(ValueError):
+        temp_loader.load_excel(str(path), 'bad"; DROP TABLE orders; --')
+
+
+# ── P1-09: execute_query 查询窗口表白名单（set_authorizer） ──────────
+
+def test_execute_query_whitelist_allows_current_table_and_master(temp_db_path):
+    """P1-09: 白名单内的表与 sqlite_master 可正常 SELECT"""
+    loader = DataLoader(temp_db_path)
+    try:
+        pd.DataFrame({"a": [1, 2]}).to_sql("t", loader.conn, index=False)
+        df = loader.execute_query("SELECT * FROM t", allowed_tables=["t"])
+        assert list(df["a"]) == [1, 2]
+
+        # sqlite_master 读取放行
+        master = loader.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table'", allowed_tables=["t"]
+        )
+        assert "t" in set(master["name"])
+    finally:
+        loader.close()
+
+
+def test_execute_query_whitelist_denies_other_tables(temp_db_path):
+    """P1-09: 引用白名单之外的表返回明确错误（含表名），连接仍可用"""
+    loader = DataLoader(temp_db_path)
+    try:
+        pd.DataFrame({"a": [1]}).to_sql("t", loader.conn, index=False)
+        pd.DataFrame({"key_hash": ["x"], "name": ["k"]}).to_sql("api_keys", loader.conn, index=False)
+
+        with pytest.raises(PermissionError) as exc_info:
+            loader.execute_query("SELECT key_hash, name FROM api_keys", allowed_tables=["t"])
+        assert "api_keys" in str(exc_info.value)
+
+        # 聚合读（COUNT(*)）同样受表白名单约束
+        with pytest.raises(PermissionError):
+            loader.execute_query("SELECT COUNT(*) AS c FROM api_keys", allowed_tables=["t"])
+
+        # 连接未被破坏，白名单内的查询仍可执行
+        ok = loader.execute_query("SELECT COUNT(*) AS c FROM t", allowed_tables=["t"])
+        assert ok.iloc[0]["c"] == 1
+    finally:
+        loader.close()
+
+
+def test_execute_query_whitelist_denies_subquery_and_cte(temp_db_path):
+    """P1-09: 子查询 / CTE / WITH 引用白名单外的表同样被拒"""
+    loader = DataLoader(temp_db_path)
+    try:
+        pd.DataFrame({"a": [1]}).to_sql("t", loader.conn, index=False)
+        pd.DataFrame({"secret": [1]}).to_sql("hidden", loader.conn, index=False)
+
+        with pytest.raises(PermissionError):
+            loader.execute_query(
+                "SELECT * FROM t WHERE a IN (SELECT secret FROM hidden)",
+                allowed_tables=["t"],
+            )
+        with pytest.raises(PermissionError):
+            loader.execute_query(
+                "WITH x AS (SELECT secret FROM hidden) SELECT * FROM x",
+                allowed_tables=["t"],
+            )
+    finally:
+        loader.close()
+
+
+def test_execute_query_whitelist_denies_writes_pragma_attach(temp_db_path):
+    """P1-09: 查询窗口内写入/PRAGMA/ATTACH 一律拒绝，数据不被改动"""
+    loader = DataLoader(temp_db_path)
+    try:
+        pd.DataFrame({"a": [1]}).to_sql("t", loader.conn, index=False)
+        for sql in [
+            "INSERT INTO t VALUES (99)",
+            "UPDATE t SET a = 0",
+            "DELETE FROM t",
+            "PRAGMA journal_mode",
+            "ATTACH DATABASE ':memory:' AS other",
+        ]:
+            with pytest.raises(PermissionError):
+                loader.execute_query(sql, allowed_tables=["t"])
+
+        df = loader.execute_query("SELECT a FROM t", allowed_tables=["t"])
+        assert list(df["a"]) == [1]  # 数据未被改动
+    finally:
+        loader.close()
+
+
+def test_execute_query_authorizer_removed_after_window(temp_db_path):
+    """P1-09: authorizer 只在查询窗口挂载——结束后 to_sql 写入路径不受影响"""
+    loader = DataLoader(temp_db_path)
+    try:
+        pd.DataFrame({"a": [1]}).to_sql("t", loader.conn, index=False)
+        loader.execute_query("SELECT * FROM t", allowed_tables=["t"])
+
+        # 查询窗口结束后，同一连接的写入（to_sql）依旧可用
+        pd.DataFrame({"a": [2, 3]}).to_sql("t2", loader.conn, if_exists="replace", index=False)
+        assert loader.execute_query("SELECT COUNT(*) AS c FROM t2").iloc[0]["c"] == 2
+    finally:
+        loader.close()

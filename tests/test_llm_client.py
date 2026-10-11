@@ -110,6 +110,48 @@ class TestValidateSql:
         sql = "-- 查询订单\nSELECT * FROM orders"
         assert client.validate_sql(sql) is True
 
+    # ── P2-32: 双引号内容剥离（SQLite DQS / 标识符）──────────────────
+
+    def test_double_quoted_dqs_string_not_blocked(self, client):
+        """P2-32: 双引号回退字符串字面量内的危险词不再误伤（评估报告实测用例）"""
+        assert client.validate_sql('SELECT "delete" FROM t') is True
+
+    def test_double_quoted_identifier_not_blocked(self, client):
+        """P2-32: 双引号标识符（含 WHERE "col"=1）剥离后词边界匹配不变"""
+        assert client.validate_sql('SELECT * FROM t WHERE "col"=1') is True
+        assert client.validate_sql('SELECT "order_id", "amount" FROM "orders"') is True
+
+    def test_double_quoted_mixed_single_quotes(self, client):
+        """P2-32: 双引号内含单引号的内容整体剥离，不产生误判"""
+        assert client.validate_sql('SELECT "it\'s ok" FROM t') is True
+
+    def test_double_quoted_does_not_hide_real_danger(self, client):
+        """P2-32: 剥离只影响引号内内容——引号外的危险动词/多语句依旧拦截"""
+        assert client.validate_sql('INSERT INTO t ("a") VALUES (1)') is False
+        assert client.validate_sql('SELECT * FROM t; DELETE FROM t') is False
+
+    # ── P2-35: 多语句 PRAGMA / ATTACH 场景 ───────────────────────────
+
+    def test_block_stacked_attach(self, client):
+        """P2-35: SELECT 后拼接 ATTACH 被多语句校验拒绝"""
+        assert client.validate_sql("SELECT 1; ATTACH DATABASE 'x.db' AS x") is False
+
+    def test_block_stacked_detach(self, client):
+        """P2-35: SELECT 后拼接 DETACH 被拒绝"""
+        assert client.validate_sql("SELECT 1; DETACH DATABASE x") is False
+
+    def test_block_stacked_pragma_with_newline(self, client):
+        """P2-35: 分号+换行后跟 PRAGMA 同样被多语句校验拒绝"""
+        assert client.validate_sql("SELECT 1;\nPRAGMA journal_mode") is False
+
+    def test_block_bare_pragma(self, client):
+        """P2-35: 单条 PRAGMA 不以 SELECT/WITH 开头，直接拒绝"""
+        assert client.validate_sql("PRAGMA journal_mode=WAL") is False
+
+    def test_block_bare_attach(self, client):
+        """P2-35: 单条 ATTACH 直接拒绝（ATTACH 在禁用词表）"""
+        assert client.validate_sql("ATTACH DATABASE 'x.db' AS x") is False
+
 
 class TestExtractSql:
     """SQL 提取测试"""
