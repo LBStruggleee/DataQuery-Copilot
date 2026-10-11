@@ -72,6 +72,39 @@ describe("fetchEnvelope", () => {
   });
 });
 
+describe("fetchEnvelope 超时与取消（P1-23）", () => {
+  /** 挂起的 fetch mock：仅在 signal 中止时以其 reason 拒绝（模拟真实 fetch 的中断行为）。 */
+  function hangingFetch(): ReturnType<typeof vi.fn> {
+    return vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new DOMException("Aborted", "AbortError")));
+    }));
+  }
+
+  it("超时映射为 QUERY_TIMEOUT 明确错误", async () => {
+    vi.stubGlobal("fetch", hangingFetch());
+    const error = await fetchEnvelope("/query", undefined, 20).catch((e) => e);
+    expect(error).toBeInstanceOf(V1ApiError);
+    expect((error as V1ApiError).code).toBe("QUERY_TIMEOUT");
+  });
+
+  it("调用方 AbortController 取消时原样抛出 AbortError（供调用方静默）", async () => {
+    vi.stubGlobal("fetch", hangingFetch());
+    const controller = new AbortController();
+    const pending = fetchEnvelope("/query", { signal: controller.signal }, 60_000);
+    controller.abort();
+    const error = await pending.catch((e) => e);
+    expect((error as Error).name).toBe("AbortError");
+  });
+
+  it("正常响应不受默认超时影响", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      version: "v1", code: "OK", message: "ok", data: { ok: true }, request_id: "req_t",
+    })));
+    const result = await fetchEnvelope<{ ok: boolean }>("/health");
+    expect(result.data).toEqual({ ok: true });
+  });
+});
+
 describe("buildQueryBody", () => {
   it("钳制分页参数", () => {
     expect(buildQueryBody("q", 0, 999)).toEqual({ question: "q", clean_result: true, max_retries: 2, page: 1, page_size: 50 });

@@ -30,13 +30,47 @@ export class V1ApiError extends Error {
   }
 }
 
-export async function fetchEnvelope<T>(path: string, init?: RequestInit): Promise<{ data: T; requestId: string }> {
+/** P1-23：所有请求统一 30s 超时，避免后端挂起时前端永远停在加载态。 */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
+function isAbortLike(error: unknown): boolean {
+  const name = error instanceof Error ? error.name : "";
+  return name === "AbortError" || name === "TimeoutError";
+}
+
+export async function fetchEnvelope<T>(
+  path: string, init?: RequestInit, timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<{ data: T; requestId: string }> {
   const merged: RequestInit = {
     ...init,
     headers: { ...readApiKey(), ...((init?.headers ?? {}) as Record<string, string>) },
   };
-  const response = await fetch(`${V1_BASE}${path}`, merged);
-  const payload = (await response.json().catch(() => null)) as ApiEnvelope<T> | null;
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  merged.signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+
+  let response: Response;
+  let payload: ApiEnvelope<T> | null = null;
+  try {
+    response = await fetch(`${V1_BASE}${path}`, merged);
+  } catch (error) {
+    // 调用方主动取消（切换数据集/组件卸载）→ 原样上抛，由调用方按 AbortError 静默处理
+    if (init?.signal?.aborted) throw error;
+    // 超时（AbortSignal.timeout 触发）→ 映射为契约中的 QUERY_TIMEOUT 明确错误
+    if (isAbortLike(error)) {
+      throw new V1ApiError("QUERY_TIMEOUT", `请求超过 ${Math.round(timeoutMs / 1000)} 秒无响应，已中止`, 0, null);
+    }
+    // 其他网络错误（断网等）原样上抛
+    throw error;
+  }
+  try {
+    payload = (await response.json()) as ApiEnvelope<T> | null;
+  } catch (error) {
+    if (init?.signal?.aborted) throw error;
+    if (isAbortLike(error)) {
+      throw new V1ApiError("QUERY_TIMEOUT", `请求超过 ${Math.round(timeoutMs / 1000)} 秒无响应，已中止`, 0, null);
+    }
+    // JSON 解析失败 → 保持原有行为：payload=null → 下面的 UNKNOWN 分支
+  }
   if (!payload || payload.version !== "v1" || typeof payload.code !== "string") {
     throw new V1ApiError("UNKNOWN", "v1 服务返回了无法识别的响应", response.status, null);
   }

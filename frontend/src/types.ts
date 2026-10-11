@@ -29,6 +29,10 @@ export type ApiState = {
   quality: QualityInfo | null;
   loading: boolean;
   error: string | null;
+  /** P1-22：概览路径保留 HTTP 状态码（401/429 等），null = 非信封错误（网络错误） */
+  status: number | null;
+  /** P1-22：概览路径保留错误码；"NETWORK_ERROR" 表示网络不可达 */
+  code: string | null;
 };
 
 export type QueryResponse = {
@@ -53,6 +57,7 @@ export type QueryHistoryItem = {
   question: string;
   timestamp: number;
   status: "success" | "error";
-  rowCount: number;
-  executionTime: number;
+  /** P2-51：失败条目无行数/耗时，记 null 而非沿用上一次成功结果 */
+  rowCount: number | null;
+  executionTime: number | null;
 };

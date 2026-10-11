@@ -12,6 +12,8 @@ type Props = {
   onRefresh: () => void;
   apiKey: string;
   onApiKeyChange: (key: string) => void;
+  /** P1-22：401 时为 true，聚焦 Key 输入框并提示重新粘贴 */
+  authRequired?: boolean;
   datasets: DatasetInfo[];
   datasetId: string;
   onDatasetChange: (id: string) => void;
@@ -29,17 +31,21 @@ const fallbackColumns = [
   ["order_status", "TEXT"],
 ];
 
-export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onApiKeyChange, datasets, datasetId, onDatasetChange, onUploadFile }: Props) {
+export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onApiKeyChange, authRequired = false, datasets, datasetId, onDatasetChange, onUploadFile }: Props) {
   const columns = api.schema?.columns ?? fallbackColumns.map(([name, type]) => ({ name, type }));
   const [columnQuery, setColumnQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const keyInputRef = useRef<HTMLInputElement>(null);
   const filteredColumns = useMemo(() => {
     const needle = columnQuery.trim().toLowerCase();
     return needle ? columns.filter((column) => `${column.name} ${column.type}`.toLowerCase().includes(needle)) : columns;
   }, [columnQuery, columns]);
-  const rows = api.quality?.total_rows ?? 5000;
-  const totalColumns = api.quality?.total_columns ?? 10;
+  // P1-24：后端没有的指标显示「—」，不再伪造 5000 行 / 10 字段
+  const rows = api.quality?.total_rows;
+  const totalColumns = api.quality?.total_columns;
   const datasetOptions = datasets.some((d) => d.id === "orders") ? datasets : [defaultDatasetOption, ...datasets];
+  // P1-24：「1 张表」硬编码改为真实可选数据集数量
+  const tableCount = datasetOptions.length;
 
   useEffect(() => {
     function focusSearch(event: KeyboardEvent) {
@@ -52,6 +58,11 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
   }, []);
+
+  useEffect(() => {
+    // P1-22：Key 失效（401）时自动聚焦输入框，引导重新粘贴
+    if (authRequired) keyInputRef.current?.focus();
+  }, [authRequired]);
 
   return (
     <aside className="sidebar panel-boundary">
@@ -66,9 +77,9 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
           <span className="dataset-card__meta">CSV</span>
         </div>
         <div className="dataset-stats">
-          <div><strong>{rows.toLocaleString()}</strong><span>行数据</span></div>
-          <div><strong>{totalColumns}</strong><span>个字段</span></div>
-          <div><strong>1</strong><span>张表</span></div>
+          <div><strong>{typeof rows === "number" ? rows.toLocaleString() : "—"}</strong><span>行数据</span></div>
+          <div><strong>{typeof totalColumns === "number" ? totalColumns : "—"}</strong><span>个字段</span></div>
+          <div><strong>{tableCount}</strong><span>张表</span></div>
         </div>
         {(
           <div className="dataset-switcher">
@@ -131,7 +142,7 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
             {history.slice(0, 3).map((item) => (
               <button className="history-item" type="button" key={item.id} onClick={() => onHistorySelect(item)}>
                 <span className={`history-item__dot ${item.status === "error" ? "is-error" : ""}`} />
-                <span className="history-item__copy"><strong>{item.question}</strong><small>{item.rowCount} 行 · {item.executionTime.toFixed(2)}s</small></span>
+                <span className="history-item__copy"><strong>{item.question}</strong><small>{item.rowCount == null ? "失败" : `${item.rowCount} 行 · ${item.executionTime == null ? "—" : `${item.executionTime.toFixed(2)}s`}`}</small></span>
               </button>
             ))}
           </div>
@@ -140,7 +151,12 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
 
       <footer className="sidebar-footer">
         {api.error ? (
-          <StatusDot tone="warning" label="API 未连接" />
+          <StatusDot tone="warning" label={
+            api.code === "AUTH_REQUIRED" ? "Key 无效，请重新粘贴"
+              : api.code === "RATE_LIMITED" ? "请求受限，请稍后重试"
+                : api.code === "NETWORK_ERROR" ? "网络错误，请检查连接"
+                  : "API 未连接"
+          } />
         ) : (
           <StatusDot tone={api.health?.database_ready ? "success" : "warning"} label={api.loading ? "正在连接数据服务" : "数据服务已连接"} />
         )}
@@ -150,6 +166,7 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
         <div className="section-label">访问密钥</div>
         <label className="key-field">
           <input
+            ref={keyInputRef}
             type="password"
             value={apiKey}
             onChange={(event) => onApiKeyChange(event.target.value)}
@@ -161,6 +178,9 @@ export function Sidebar({ api, history, onHistorySelect, onRefresh, apiKey, onAp
             <button type="button" onClick={() => onApiKeyChange("")} aria-label="清除密钥">清除</button>
           )}
         </label>
+        {authRequired && (
+          <p className="key-hint" role="alert">Key 无效或已吊销（401），请重新粘贴管理员签发的 Key。</p>
+        )}
       </section>
     </aside>
   );

@@ -395,6 +395,7 @@ td:first-child { color: var(--text); }
 .key-field input::placeholder { color: var(--muted); }
 .key-field button { border: 0; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; padding: 6px; }
 .key-field button:hover { color: var(--text); }
+.key-hint { margin: 8px 0 0; font-size: 11px; line-height: 1.5; color: var(--warning); }
 
 /* 数据集切换与上传 */
 .dataset-switcher { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }

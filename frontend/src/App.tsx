@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BrandMark } from "./components/BrandMark";
 import { Inspector } from "./components/Inspector";
@@ -6,12 +6,12 @@ import { QueryComposer } from "./components/QueryComposer";
 import { ResultsPanel } from "./components/ResultsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { API_KEY_STORAGE_KEY, DEFAULT_PAGE_SIZE, V1ApiError, listDatasetsLive, loadWorkspaceOverviewV1Live, runQueryV1Live, toQueryResponse, uploadDatasetLive } from "./apiV1/client";
+import { HISTORY_LIMIT, buildHistoryItem, readHistory, readTheme, saveHistory, saveTheme, type HistoryMetrics } from "./history";
 import type { DatasetInfo } from "./apiV1/types";
 import { GithubIcon, ThemeIcon } from "./icons";
 import type { ApiState, QueryHistoryItem, QueryPhase, QueryResponse, QueryStatus } from "./types";
 
-const HISTORY_KEY = "dataquery-copilot.query-history";
-const initialApiState: ApiState = { health: null, schema: null, quality: null, loading: true, error: null };
+const initialApiState: ApiState = { health: null, schema: null, quality: null, loading: true, error: null, status: null, code: null };
 const queryPhases: QueryPhase[] = ["schema", "generate", "validate", "execute"];
 const emptyResult: QueryResponse = {
   question: "",
@@ -28,13 +28,13 @@ const emptyResult: QueryResponse = {
 };
 type ThemeMode = "dark" | "light";
 
-function readHistory(): QueryHistoryItem[] {
-  try {
-    const stored = localStorage.getItem(HISTORY_KEY);
-    return stored ? JSON.parse(stored) as QueryHistoryItem[] : [];
-  } catch {
-    return [];
-  }
+/** P1-22：概览错误按码给出针对性短标签（连接指示器）。 */
+function apiErrorLabel(code: string | null): string {
+  if (code === "AUTH_REQUIRED") return "Key 无效";
+  if (code === "RATE_LIMITED") return "请求受限";
+  if (code === "NETWORK_ERROR") return "网络错误";
+  if (code === "QUERY_TIMEOUT") return "请求超时";
+  return "连接失败";
 }
 
 export default function App() {
@@ -47,26 +47,37 @@ export default function App() {
   const [history, setHistory] = useState<QueryHistoryItem[]>(readHistory);
   const [paging, setPaging] = useState<{ page: number; totalPages: number; truncated: boolean } | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   const [datasetId, setDatasetId] = useState("orders");
+  // P2-53：同一渲染帧内双击防并发（queryStatus 闭包值做不到同步互斥）
+  const inflightRef = useRef(false);
+  // P2-52：在途查询的 AbortController，切换数据集时取消
+  const queryAbortRef = useRef<AbortController | null>(null);
   const [apiKey, setApiKey] = useState(() => {
     try { return localStorage.getItem(API_KEY_STORAGE_KEY) ?? ""; } catch { return ""; }
   });
-  const [theme, setTheme] = useState<ThemeMode>(() => {
-    try { return localStorage.getItem("dataquery-copilot.theme") === "light" ? "light" : "dark"; } catch { return "dark"; }
-  });
+  const [theme, setTheme] = useState<ThemeMode>(readTheme);
 
-  const refreshOverview = useCallback(async () => {
-    setApi((current) => ({ ...current, loading: true, error: null }));
+  const refreshOverview = useCallback(async (signal?: AbortSignal) => {
+    setApi((current) => ({ ...current, loading: true, error: null, status: null, code: null }));
     try {
       const [overview, ds] = await Promise.all([
-        loadWorkspaceOverviewV1Live(undefined, datasetId),
-        listDatasetsLive(),
+        loadWorkspaceOverviewV1Live(signal, datasetId),
+        listDatasetsLive(signal),
       ]);
       setDatasets(ds.data);
-      setApi({ health: overview.health, schema: overview.schema, quality: overview.quality, loading: false, error: null });
+      setApi({ health: overview.health, schema: overview.schema, quality: overview.quality, loading: false, error: null, status: null, code: null });
     } catch (error) {
-      setApi((current) => ({ ...current, loading: false, error: error instanceof Error ? error.message : "无法连接数据服务" }));
+      // P1-21：数据集/Key 切换导致的过期请求（AbortController 已取消）静默丢弃，不用旧响应覆盖新状态
+      if (signal?.aborted) return;
+      if (error instanceof V1ApiError) {
+        // P1-22：保留 V1ApiError 的 status/code，供 401/429 针对性提示
+        setApi((current) => ({ ...current, loading: false, error: error.message, status: error.status, code: error.code }));
+      } else {
+        // P1-22：网络错误（断网等非信封错误）单独提示
+        setApi((current) => ({ ...current, loading: false, error: "网络错误：无法连接数据服务，请检查网络与 API 地址后重试。", status: null, code: "NETWORK_ERROR" }));
+      }
     }
   }, [datasetId]);
 
@@ -81,10 +92,19 @@ export default function App() {
 
   function changeDataset(next: string) {
     if (next === datasetId) return;
+    // P2-52：切换数据集时取消在途查询，旧数据集的迟到响应不再覆盖展示
+    queryAbortRef.current?.abort();
     setDatasetId(next);
     setPaging(null);
     setQueryError(null);
     setErrorCode(null);
+    setRequestId(null);
+    if (inflightRef.current) {
+      // 在途查询被取消：回到初始态，避免旧结果以新数据集名义展示
+      setQueryStatus("idle");
+      setPhase("idle");
+      setResult(emptyResult);
+    }
   }
 
   async function uploadFile(file: File) {
@@ -94,6 +114,13 @@ export default function App() {
       const uploaded = await uploadDatasetLive(file);
       const ds = await listDatasetsLive();
       setDatasets(ds.data);
+      // P2-52 同源：上传成功同样切换数据集，取消在途查询避免旧数据集结果覆盖展示
+      queryAbortRef.current?.abort();
+      if (inflightRef.current) {
+        setQueryStatus("idle");
+        setPhase("idle");
+        setResult(emptyResult);
+      }
       setDatasetId(uploaded.data.id);
     } catch (error) {
       const code = error instanceof V1ApiError ? error.code : "SERVICE_UNAVAILABLE";
@@ -103,32 +130,30 @@ export default function App() {
     }
   }
 
-  useEffect(() => { void refreshOverview(); }, [refreshOverview]);
+  useEffect(() => {
+    // P1-21：useEffect 内 AbortController，依赖（数据集）变化时自动取消上一轮概览请求
+    const controller = new AbortController();
+    void refreshOverview(controller.signal);
+    return () => controller.abort();
+  }, [refreshOverview]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("dataquery-copilot.theme", theme);
+    saveTheme(theme);
   }, [theme]);
 
-  function rememberQuery(next: QueryResponse, status: "success" | "error") {
-    const item: QueryHistoryItem = {
-      id: `${Date.now()}-${next.question}`,
-      question: next.question,
-      timestamp: Date.now(),
-      status,
-      rowCount: next.row_count,
-      executionTime: next.execution_time,
-    };
+  function rememberQuery(question: string, status: "success" | "error", metrics?: HistoryMetrics) {
+    const item = buildHistoryItem(question, status, metrics);
     setHistory((current) => {
-      const nextHistory = [item, ...current.filter((entry) => entry.question !== item.question)].slice(0, 8);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory));
+      const nextHistory = [item, ...current.filter((entry) => entry.question !== item.question)].slice(0, HISTORY_LIMIT);
+      saveHistory(nextHistory);
       return nextHistory;
     });
   }
 
   const submitQuery = useCallback(async (nextQuestion = question, nextPage = 1) => {
     const trimmed = nextQuestion.trim();
-    if (!trimmed || queryStatus === "loading") return;
+    if (!trimmed || inflightRef.current) return;
     if (!api.health?.database_ready || !api.health.llm_configured) {
       setQueryError("数据服务尚未就绪，请先确认 API Key 与 LLM 配置。");
       setQueryStatus("error");
@@ -139,7 +164,11 @@ export default function App() {
     setQueryStatus("loading");
     setQueryError(null);
     setErrorCode(null);
+    setRequestId(null);
     setPhase("schema");
+    inflightRef.current = true;
+    const controller = new AbortController();
+    queryAbortRef.current = controller;
     let phaseIndex = 0;
     const phaseTimer = window.setInterval(() => {
       phaseIndex = Math.min(phaseIndex + 1, queryPhases.length - 1);
@@ -147,27 +176,46 @@ export default function App() {
     }, 650);
 
     try {
-      const live = await runQueryV1Live(trimmed, nextPage, DEFAULT_PAGE_SIZE, datasetId);
+      const live = await runQueryV1Live(trimmed, nextPage, DEFAULT_PAGE_SIZE, datasetId, controller.signal);
+      if (controller.signal.aborted) return;
       const nextResult = toQueryResponse(live.data);
       setResult(nextResult);
+      setRequestId(live.requestId);
       setPaging({ page: live.data.page, totalPages: live.data.total_pages, truncated: live.data.truncated });
       setQueryStatus("success");
       setPhase("complete");
-      rememberQuery(nextResult, "success");
+      rememberQuery(trimmed, "success", { rowCount: nextResult.row_count, executionTime: nextResult.execution_time });
     } catch (error) {
-      const code = error instanceof V1ApiError ? error.code : "SERVICE_UNAVAILABLE";
-      const message = error instanceof Error ? error.message : "查询服务执行失败";
+      // P1-21/P2-52：调用方主动取消（切换数据集）静默处理，不提示也不写历史
+      if (controller.signal.aborted) return;
+      let code: string;
+      let message: string;
+      if (error instanceof V1ApiError) {
+        code = error.code;
+        message = error.message;
+      } else {
+        // P1-22：网络错误单独提示，与业务错误区分
+        code = "NETWORK_ERROR";
+        message = "网络错误：无法连接查询服务，请检查网络后重试。";
+      }
       setQueryStatus("error");
       setQueryError(message);
       setErrorCode(code);
-      rememberQuery({ ...result, question: trimmed, error: message }, "error");
+      // P2-51：失败条目不沿用上一次成功结果的行数/耗时
+      rememberQuery(trimmed, "error");
     } finally {
+      if (queryAbortRef.current === controller) {
+        inflightRef.current = false;
+        queryAbortRef.current = null;
+      }
       window.clearInterval(phaseTimer);
       setPhase((current) => current === "execute" || current === "schema" || current === "generate" || current === "validate" ? "complete" : current);
     }
-  }, [api.health, datasetId, question, queryStatus, result]);
+  }, [api.health, datasetId, question]);
 
   const live = Boolean(api.health?.database_ready && api.health.llm_configured);
+  // P1-22：401 时聚焦侧栏 Key 输入框并提示重新粘贴
+  const authRequired = api.status === 401 || api.code === "AUTH_REQUIRED" || errorCode === "AUTH_REQUIRED";
 
   return (
     <div className="app-shell">
@@ -175,7 +223,7 @@ export default function App() {
         <div className="brand"><BrandMark /><strong>DataQuery</strong><span>Copilot</span></div>
         <div className="topbar__context"><span>工作区</span><i>/</i><strong>电商订单分析</strong></div>
         <div className="topbar__actions">
-          <span className={`connection-pill ${api.error || !live ? "is-offline" : ""}`}><i />{api.error ? "连接失败" : live ? "API 已连接" : "等待配置"}</span>
+          <span className={`connection-pill ${api.error || !live ? "is-offline" : ""}`}><i />{api.error ? apiErrorLabel(api.code) : live ? "API 已连接" : "等待配置"}</span>
           <button className="icon-button" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} title={theme === "dark" ? "浅色主题" : "深色主题"}><ThemeIcon /></button>
           <a className="icon-button" href="https://github.com/LBStruggleee/DataQuery-Copilot" target="_blank" rel="noreferrer" aria-label="打开 GitHub 仓库" title="打开 GitHub 仓库"><GithubIcon /></a>
           <div className="avatar" aria-label="用户 LB">LB</div>
@@ -183,12 +231,12 @@ export default function App() {
       </header>
 
       <div className="workspace">
-        <Sidebar api={api} history={history} onHistorySelect={(item) => void submitQuery(item.question)} onRefresh={() => void refreshOverview()} apiKey={apiKey} onApiKeyChange={changeApiKey} datasets={datasets} datasetId={datasetId} onDatasetChange={changeDataset} onUploadFile={(file) => void uploadFile(file)} />
+        <Sidebar api={api} history={history} onHistorySelect={(item) => void submitQuery(item.question)} onRefresh={() => void refreshOverview()} apiKey={apiKey} onApiKeyChange={changeApiKey} authRequired={authRequired} datasets={datasets} datasetId={datasetId} onDatasetChange={changeDataset} onUploadFile={(file) => void uploadFile(file)} />
         <main className="main-stage">
           <QueryComposer question={question} status={queryStatus} phase={phase} live={live} onQuestionChange={setQuestion} onSubmit={() => void submitQuery()} />
           <ResultsPanel result={result} status={queryStatus} phase={phase} error={queryError} paging={paging} onPageChange={(page) => void submitQuery(question, page)} errorCode={errorCode} />
         </main>
-        <Inspector api={api} result={result} status={queryStatus} phase={phase} error={queryError} />
+        <Inspector api={api} result={result} status={queryStatus} phase={phase} error={queryError} requestId={requestId} />
       </div>
     </div>
   );

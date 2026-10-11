@@ -31,6 +31,14 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
+/** P1-22/P2-55：按错误码给出针对性引导（401/429/超时/网络）。 */
+const errorCodeHints: Record<string, string> = {
+  AUTH_REQUIRED: "API Key 无效或缺失，请在左侧「访问密钥」中重新粘贴有效 Key。",
+  RATE_LIMITED: "请求过于频繁或今日配额已用尽，请稍后重试。",
+  QUERY_TIMEOUT: "请求超时（30 秒无响应），请检查网络或稍后重试。",
+  NETWORK_ERROR: "网络连接失败，请检查网络与 API 地址后重试。",
+};
+
 export function ResultsPanel({ result, status, phase, error, paging, onPageChange, errorCode }: Props) {
   const [tab, setTab] = useState<Tab>("table");
   const loading = status === "loading";
@@ -53,7 +61,7 @@ export function ResultsPanel({ result, status, phase, error, paging, onPageChang
       <div className="results-content">
         {error && (
           <div className="result-state result-state--error" role="alert">
-            <span>查询未完成{errorCode ? <code className="error-code">{errorCode}</code> : null}</span><strong>{error}</strong><p>可以调整问题后重新运行，已有结果不会丢失。</p>
+            <span>查询未完成{errorCode ? <code className="error-code">{errorCode}</code> : null}</span><strong>{error}</strong><p>{(errorCode && errorCodeHints[errorCode]) ?? "可以调整问题后重新运行，已有结果不会丢失。"}</p>
           </div>
         )}
         {paging?.truncated && !error && (
@@ -74,12 +82,13 @@ export function ResultsPanel({ result, status, phase, error, paging, onPageChang
         {!error && !empty && tab === "table" && (
           <div className="table-wrap">
             <table>
-              <thead><tr>{result.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
+              {/* P2-54：SQL 返回重复列名（JOIN 常见）时以「列名#序号」消解 key 冲突 */}
+              <thead><tr>{result.columns.map((column, columnIndex) => <th key={`${column}#${columnIndex}`}>{column}</th>)}</tr></thead>
               <tbody>
                 {result.rows.map((row, rowIndex) => (
                   <tr key={rowIndex}>
                     {result.columns.map((column, columnIndex) => (
-                      <td className={typeof row[column] === "number" ? "numeric" : ""} key={column}>
+                      <td className={typeof row[column] === "number" ? "numeric" : ""} key={`${column}#${columnIndex}`}>
                         {columnIndex === 0 && <span className="category-dot" />}{formatValue(row[column])}
                       </td>
                     ))}

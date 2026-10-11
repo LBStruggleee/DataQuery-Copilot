@@ -34,10 +34,6 @@ export function CodeIcon(props: IconProps) {
   return <svg {...defaults} {...props}><path d="m8 9-3 3 3 3m8-6 3 3-3 3m-3-9-2 12" /></svg>;
 }
 
-export function ChevronIcon(props: IconProps) {
-  return <svg {...defaults} {...props}><path d="m9 18 6-6-6-6" /></svg>;
-}
-
 export function ArrowIcon(props: IconProps) {
   return <svg {...defaults} {...props}><path d="M5 12h14m-5-5 5 5-5 5" /></svg>;
 }

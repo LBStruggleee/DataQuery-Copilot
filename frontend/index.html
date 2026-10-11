@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- P1-25：CSP —— 脚本仅允许同源（防 XSS 窃取 API Key）；style 需 unsafe-inline（React 动态 style 属性
+         与 Vite 注入的样式）及 Google Fonts；connect 需放行部署时通过 VITE_API_BASE_URL 配置的 API 源。
+         开发模式下由 vite.config.ts 的 strip-csp-in-dev 插件摘除（react-refresh 内联 preamble 所需）。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
     <meta name="theme-color" content="#08090a" />
     <meta
       name="description"

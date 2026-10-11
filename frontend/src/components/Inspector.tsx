@@ -4,7 +4,7 @@ import { CheckIcon, CodeIcon, CopyIcon } from "../icons";
 import type { ApiState, QueryPhase, QueryResponse, QueryStatus } from "../types";
 import { StatusDot } from "./StatusDot";
 
-type Props = { api: ApiState; result: QueryResponse; status: QueryStatus; phase: QueryPhase; error: string | null };
+type Props = { api: ApiState; result: QueryResponse; status: QueryStatus; phase: QueryPhase; error: string | null; /** P1-24：App 保存的 runQueryV1Live 真实 request_id */ requestId?: string | null };
 
 const phases: Array<{ id: QueryPhase; label: string }> = [
   { id: "schema", label: "读取 Schema" },
@@ -17,11 +17,12 @@ function phaseIndex(phase: QueryPhase) {
   return phases.findIndex((item) => item.id === phase);
 }
 
-export function Inspector({ api, result, status, phase, error }: Props) {
+export function Inspector({ api, result, status, phase, error, requestId = null }: Props) {
   const [copied, setCopied] = useState(false);
-  const missingCount = api.quality
-    ? Object.values(api.quality.missing_values).reduce((sum, value) => sum + value, 0)
-    : 50;
+  // P1-24：缺失值按真实 quality 数据展示；后端没有的指标（异常值）固定显示「—」，不再伪造
+  const missingEntries = api.quality
+    ? Object.entries(api.quality.missing_values).filter(([, value]) => value > 0).slice(0, 3)
+    : [];
   const currentPhase = phaseIndex(phase);
 
   async function copySql() {
@@ -72,15 +73,29 @@ export function Inspector({ api, result, status, phase, error }: Props) {
       <section className="inspector-section inspector-section--quality">
         <div className="quality-heading"><div><span className="section-label">数据质量</span><strong>{api.quality?.total_rows.toLocaleString() ?? "—"} 行扫描完成</strong></div><span>{api.quality ? "实时" : "—"}</span></div>
         <div className="quality-grid">
-          <div><strong>{missingCount}</strong><span>缺失值</span></div>
-          <div><strong>{api.quality?.duplicates ?? 0}</strong><span>重复行</span></div>
-          <div><strong>5</strong><span>异常值</span></div>
+          <div><strong>{api.quality ? missingEntries.reduce((sum, [, value]) => sum + value, 0) : "—"}</strong><span>缺失值</span></div>
+          <div><strong>{api.quality ? api.quality.duplicates.toLocaleString() : "—"}</strong><span>重复行</span></div>
+          <div><strong>—</strong><span>异常值</span></div>
         </div>
-        <div className="quality-note"><span>amount</span><div><i style={{ width: `${Math.max((missingCount / (api.quality?.total_rows ?? 5000)) * 100, 1)}%` }} /></div><strong>{((missingCount / (api.quality?.total_rows ?? 5000)) * 100).toFixed(1)}%</strong></div>
+        {/* P1-24：缺失条按真实缺失列渲染（后端 quality.missing_values），不再固定标注 amount */}
+        {api.quality && missingEntries.length > 0 ? missingEntries.map(([column, count]) => {
+          const total = api.quality?.total_rows ?? 0;
+          const ratio = total > 0 ? (count / total) * 100 : 0;
+          return (
+            <div className="quality-note" key={column}>
+              <span>{column}</span>
+              <div><i style={{ width: `${Math.max(ratio, 1)}%` }} /></div>
+              <strong>{ratio.toFixed(1)}%</strong>
+            </div>
+          );
+        }) : (
+          <div className="quality-note"><span>{api.quality ? "无缺失值" : "—"}</span></div>
+        )}
       </section>
 
       <footer className="inspector-footer">
-        <span>查询 ID</span><code>{status === "idle" ? "—" : `qry_${Math.abs(result.question.length * 7919).toString(16).slice(0, 8)}`}</code>
+        {/* P1-24：展示后端返回的真实 request_id，不再用问题长度伪造 qry_ 哈希 */}
+        <span>查询 ID</span><code>{status === "idle" || !requestId ? "—" : requestId}</code>
       </footer>
     </aside>
   );
