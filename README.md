@@ -33,7 +33,7 @@ python -m src.cli interactive
 uvicorn api.main:app --reload
 # API 文档: http://127.0.0.1:8000/docs
 
-# 另开一个终端启动 React v0 页面
+# 另开一个终端启动 React 工作台
 cd frontend
 npm install
 npm run dev
@@ -197,7 +197,16 @@ python -m src.cli batch questions.txt --output report.txt
 
 ### 单元测试
 ```bash
-python -m pytest tests/ -v   # 后端测试
+python -m pytest tests/ -v        # 后端测试（252 个用例）
+cd frontend && npm test           # 前端 vitest 单测
+```
+
+### E2E 测试
+Playwright 端到端测试需要真实后端与测试 API Key，一键入口会自动准备隔离库、
+签发测试 Key、拉起后端与前端并运行全部用例：
+```bash
+bash scripts/e2e_up.sh            # Linux / macOS / Git Bash
+./scripts/e2e_up.ps1              # Windows PowerShell
 ```
 
 ### 访问控制（API Key）
@@ -224,4 +233,5 @@ python -c "import sqlite3; print(sqlite3.connect('/tmp/restored.db').execute('SE
 
 ### CI 检查
 
-GitHub Actions 会执行全量后端测试（`pytest tests/ -q`）、前端 vitest 单测与 Playwright e2e 真实链路、依赖安全审计（pip-audit / npm audit）、非阻塞 ruff lint 与 mypy 类型检查、React 生产构建与密钥清扫，配置文件为 `.github/workflows/ci.yml`。
+GitHub Actions 会执行全量后端测试（`pytest tests/ -q`，252 个用例）、前端 vitest 单测、Playwright e2e 真实链路（经 `scripts/e2e_up.sh` 自动签发测试 Key）、依赖安全审计（pip-audit / npm audit）、非阻塞 ruff lint 与 mypy 类型检查、React 生产构建与密钥清扫，配置文件为 `.github/workflows/ci.yml`。
+依赖更新由 [Dependabot](.github/dependabot.yml) 管理（pip / npm / GitHub Actions，周更）。
