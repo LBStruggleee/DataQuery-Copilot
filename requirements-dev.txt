@@ -3,5 +3,5 @@
 # pytest>=9.0.3：修复 PYSEC-2026-1845（pip-audit 门禁要求），全量测试在 pytest 9 下通过
 pytest>=9.0.3,<10.0.0
 httpx>=0.27.0
-ruff>=0.6.0
+ruff>=0.17.1
 mypy>=1.11.0
