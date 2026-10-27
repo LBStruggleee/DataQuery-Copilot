@@ -2,6 +2,7 @@
 <p align="center">
   <img src="DataQuery-Copilot-logo-icon.png" alt="DataQuery-Copilot logo" width="160" />
 </p>
+
 # DataQuery Copilot
 
 > 基于 LLM 的数据查询自动化工具 — 用自然语言查数据，自动生成 SQL 并执行
